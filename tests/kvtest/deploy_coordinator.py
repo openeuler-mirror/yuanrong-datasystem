@@ -18,6 +18,7 @@ exec/collect/clean orchestration live in deploy_common.py.
 import argparse
 import json
 import os
+import shlex
 import sys
 from types import SimpleNamespace
 
@@ -147,7 +148,14 @@ def cmd_start_standalone(args, pods):
     remote_dir = getattr(args, 'remote_dir', None) or os.path.dirname(args.remote_config) or '/tmp/ds_coordinator'
     binary_name = PROCESS_NAME_STANDALONE
 
-    extra = f'--coordinator {{pod_ip}}:{args.port} --hooks --ttl {args.ttl} --expected-member-count {args.expected_member_count}'
+    extra = (f'--coordinator {{pod_ip}}:{args.port} --hooks --ttl {args.ttl} '
+             f'--expected-member-count {args.expected_member_count}')
+    if getattr(args, 'update_config_port', 0):
+        extra += f' --update-config-port {args.update_config_port}'
+    if getattr(args, 'update_config_not_ready_hold_ms', 0):
+        extra += f' --update-config-not-ready-hold-ms {args.update_config_not_ready_hold_ms}'
+    if getattr(args, 'update_config_shutdown_hold_ms', 0):
+        extra += f' --update-config-shutdown-hold-ms {args.update_config_shutdown_hold_ms}'
 
     def do_op(pod):
         _, status, _ = check_process(pod, args.namespace, binary_name,
@@ -421,6 +429,45 @@ def cmd_exec(args, pods):
     return cmd_exec_shared(args, pods, args.timeout)
 
 
+def cmd_update_config(args, pods):
+    """POST a runtime config update to each standalone pod's /update_config endpoint.
+
+    The endpoint is served by the coordinator_test binary on ``--update-port``
+    (standalone mode only; dscli mode has no such endpoint). Each pod's JSON
+    response {"code":..., "message":...} is parsed; a non-zero code or an
+    unreachable endpoint marks that pod failed.
+    """
+    body = args.json
+    if args.json_file:
+        with open(args.json_file) as f:
+            body = f.read()
+    if body is None:
+        log_error('ERROR: one of --json or --json-file is required')
+        return 1
+
+    def do_op(pod):
+        curl = (
+            'curl -s -m 10 -X POST http://127.0.0.1:{port}/update_config '
+            '-H "Content-Type: application/json" --data-raw {body}'
+        ).format(port=args.update_port, body=shlex.quote(body))
+        out = kubectl_exec_raw(pod, args.namespace, curl, timeout=args.timeout)
+        name = pod['name']
+        if not out:
+            log_error(f'  {name} ({pod["ip"]}) -> endpoint unreachable')
+            return False
+        try:
+            resp = json.loads(out)
+        except ValueError:
+            log_error(f'  {name} ({pod["ip"]}) -> invalid response: {out!r}')
+            return False
+        code = resp.get('code')
+        message = resp.get('message', '')
+        log_info(f'  {name} ({pod["ip"]}) -> code={code} {message}')
+        return code == 0
+
+    return do_for_all_pods(pods, do_op, 'Updating runtime config')
+
+
 def cmd_collect(args, pods):
     """Collect coordinator logs from pods."""
     return cmd_collect_shared(args, pods, 'coordinator logs', args.timeout)
@@ -525,6 +572,14 @@ def main():
                               help='Heartbeat TTL seconds (standalone mode only, default: 30)')
     parser_start.add_argument('--expected-member-count', type=int, default=1,
                               help='Raft member count for multi-replica (standalone mode only, default: 1)')
+    parser_start.add_argument('--update-config-port', type=int, default=0,
+                              help='Standalone config-update HTTP port (default: 0 = disabled)')
+    parser_start.add_argument('--update-config-not-ready-hold-ms', type=int, default=0,
+                              help='Hold the standalone config-update NOT_READY window for N ms '
+                                   '(update-config HTTP server ready, runtime not started; 0=off)')
+    parser_start.add_argument('--update-config-shutdown-hold-ms', type=int, default=0,
+                              help='Hold the standalone config-update SHUTTING_DOWN window for N ms '
+                                   '(runtime stopping, update-config HTTP server still alive; 0=off)')
     parser_start.add_argument('--remote-dir', default='/tmp/ds_coordinator',
                               help='Remote directory with standalone binary (must match install --remote-dir)')
     parser_start.add_argument('--start-timeout', type=int, default=90,
@@ -579,6 +634,16 @@ def main():
                                         help='Execute command in pods')
     parser_exec.add_argument('--cmd', '-c', required=True,
                              help='Command to execute (required)')
+
+    # Update-config subcommand
+    parser_update_config = subparsers.add_parser('update-config', parents=[parent_parser],
+                                                 help='POST a runtime config update to each standalone pod')
+    parser_update_config.add_argument('--json', '-j', default=None,
+                                      help='JSON config update to POST (e.g. {"minloglevel":"2"})')
+    parser_update_config.add_argument('--json-file', default=None,
+                                      help='Read JSON config update from a file')
+    parser_update_config.add_argument('--update-port', type=int, default=31512,
+                                      help='Standalone config-update HTTP port (default: 31512)')
 
     # Collect subcommand
     parser_collect = subparsers.add_parser('collect', parents=[parent_parser],
@@ -693,6 +758,8 @@ def main():
                                help='Heartbeat TTL (standalone mode)')
     parser_deploy.add_argument('--expected-member-count', type=int, default=1,
                                help='Raft member count (standalone mode)')
+    parser_deploy.add_argument('--update-config-port', type=int, default=0,
+                               help='Standalone config-update HTTP port (default: 0 = disabled)')
     parser_deploy.add_argument('--binary', default=None,
                                help='Path to coordinator_test binary (standalone mode)')
     parser_deploy.add_argument('--lib-dir', default=None,
@@ -762,6 +829,8 @@ def main():
         return cmd_check(args, pods)
     elif args.action == 'exec':
         return cmd_exec(args, pods)
+    elif args.action == 'update-config':
+        return cmd_update_config(args, pods)
     elif args.action == 'collect':
         return cmd_collect(args, pods)
     elif args.action == 'clean':

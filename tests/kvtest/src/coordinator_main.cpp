@@ -1,5 +1,6 @@
 #include "common/jf_service_discovery.h"
 #include "common/jemalloc_prof.h"
+#include "common/config_update_http_server.h"
 
 #include <atomic>
 #include <csignal>
@@ -47,6 +48,10 @@ struct Args {
     bool hooks = false;
     int ttl = 30;
     int expectedMemberCount = 1;
+    // 0 = disabled（默认不开启 update-config HTTP server）；显式指定端口才开启。
+    int updateConfigPort = 0;
+    int updateConfigNotReadyHoldMs = 0;
+    int updateConfigShutdownHoldMs = 0;
     bool showVersion = false;
 };
 
@@ -80,6 +85,12 @@ static bool ParseArgs(int argc, char **argv, Args &args)
             args.ttl = std::stoi(next());
         else if (arg == "--expected-member-count")
             args.expectedMemberCount = std::stoi(next());
+        else if (arg == "--update-config-port")
+            args.updateConfigPort = std::stoi(next());
+        else if (arg == "--update-config-not-ready-hold-ms")
+            args.updateConfigNotReadyHoldMs = std::stoi(next());
+        else if (arg == "--update-config-shutdown-hold-ms")
+            args.updateConfigShutdownHoldMs = std::stoi(next());
         else {
             fprintf(stderr, "Unknown arg: %s\n", arg.c_str());
             return false;
@@ -143,6 +154,23 @@ int main(int argc, char **argv)
     std::promise<Status> resultPromise;
     auto resultFuture = resultPromise.get_future().share();
 
+    // update-config HTTP server 先于 runtime 启动，使启动早期（runtime 尚未 Ready）与
+    // 停止后期（runtime 已 STOPPING）都能经 HTTP 命中 UpdateConfig 的状态码；配合
+    // --update-config-not-ready-hold-ms / --update-config-shutdown-hold-ms 两个测试钩子
+    // 稳定暴露 K_NOT_READY / K_SHUTTING_DOWN 窗口（默认 0，行为与原来一致）。
+    kvtest::ConfigUpdateHttpServer updateServer(args.updateConfigPort, [](const std::string &configJson) {
+        auto status = CoordinatorServer::GetInstance()->UpdateConfig(configJson);
+        return kvtest::BuildUpdateConfigResponse(static_cast<uint32_t>(status.GetCode()), status.ToString());
+    });
+    updateServer.Start();
+
+    if (args.updateConfigNotReadyHoldMs > 0) {
+        printf("coordinator_test: holding UpdateConfig NOT_READY window for %d ms "
+               "(update-config HTTP server ready, runtime not started)\n",
+               args.updateConfigNotReadyHoldMs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(args.updateConfigNotReadyHoldMs));
+    }
+
     std::thread runtimeThread([&]() {
         try {
             resultPromise.set_value(CoordinatorServer::GetInstance()->InitAndRun(options));
@@ -158,6 +186,14 @@ int main(int argc, char **argv)
     }
 
     CoordinatorServer::GetInstance()->Stop();
+
+    if (args.updateConfigShutdownHoldMs > 0) {
+        printf("coordinator_test: holding UpdateConfig SHUTTING_DOWN window for %d ms "
+               "(runtime stopping, update-config HTTP server still alive)\n",
+               args.updateConfigShutdownHoldMs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(args.updateConfigShutdownHoldMs));
+    }
+
     runtimeThread.join();
 
     Status status = resultFuture.get();
