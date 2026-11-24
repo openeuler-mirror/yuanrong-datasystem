@@ -16,9 +16,11 @@
 
 #include <algorithm>
 #include <random>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
@@ -49,11 +51,13 @@ std::vector<std::string> ShuffledValidCandidates(const std::vector<std::string> 
 
 CoordinatorDiscoveryCache::CoordinatorDiscoveryCache(std::shared_ptr<ICoordinatorDiscovery> discovery,
                                                      std::vector<std::string> initialCandidates)
-    : discovery_(std::move(discovery)),
-      candidates_(ShuffledValidCandidates(initialCandidates)),
-      thread_([this] { Run(); })
+    : discovery_(std::move(discovery)), candidates_(ShuffledValidCandidates(initialCandidates))
 {
     LOG(INFO) << "Coordinator Discovery initial candidates: " << VectorToString(candidates_, false);
+    INJECT_POINT_NO_RETURN("CoordinatorDiscoveryCache.StartThread", [] {
+        throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+    });
+    thread_ = std::thread([this] { Run(); });
 }
 
 CoordinatorDiscoveryCache::~CoordinatorDiscoveryCache()

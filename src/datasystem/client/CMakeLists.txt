@@ -174,16 +174,13 @@ add_custom_target(clean_datasystem_rpath
 
 add_dependencies(clean_datasystem_rpath dsbench_cpp)
 
-list(APPEND common_etcd_client
-        common_util)
-
 list(APPEND ROUTER_CLIENT_SRCS
         router_client.cpp)
 
 list(APPEND ROUTER_CLIENT_DEPEND_LIBS
         cluster_topology
-        common_etcd_client
-        etcdapi_proto
+        common_coordinator_store
+        static_coordinator_discovery
         common_util)
 
 # static library for ut.

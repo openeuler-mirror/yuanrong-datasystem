@@ -11,7 +11,6 @@
 
 #include <condition_variable>
 
-#include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/util/thread.h"
@@ -24,7 +23,6 @@ struct TopologyObserverDiagnostics {
     uint64_t topologyVersion{ 0 };
     uint64_t readFailures{ 0 };
     uint64_t shutdownTimeouts{ 0 };
-    bool resyncRequired{ false };
     std::string lastError;
 };
 
@@ -35,11 +33,10 @@ class TopologyObserver final {
 public:
     /**
      * @brief Bind Observer-exclusive dependencies.
-     * @param[in] backend Backend that outlives this Observer.
      * @param[in] reader Reader that outlives this Observer.
      * @param[in] keys Key helper that outlives this Observer.
      */
-    TopologyObserver(ICoordinationBackend &backend, TopologyReader &reader, const TopologyKeyHelper &keys);
+    TopologyObserver(TopologyReader &reader, const TopologyKeyHelper &keys);
 
     /**
      * @brief Shut down and join the state thread before releasing Observer state.
@@ -57,7 +54,7 @@ public:
     TopologyObserver &operator=(const TopologyObserver &) = delete;
 
     /**
-     * @brief Register the exact watch, read back, and start the serial loop.
+     * @brief Read the initial snapshot and start polling for changes.
      * @return K_OK on success; a backend, validation, or thread-start error otherwise.
      */
     Status Start();
@@ -86,26 +83,19 @@ private:
     static constexpr int32_t OBSERVER_READ_TIMEOUT_MS = 3'000;
 
     /**
-     * @brief Consume topology doorbells and publish exact-read Snapshots on the Observer state thread.
+     * @brief Poll for topology changes and publish validated snapshots.
      */
     void Run();
 
     /**
      * @brief Exact-read and publish one topology Snapshot.
-     * @param[in] fullRebuildAllowed Whether a version gap may replace the local Snapshot.
      * @return Read, validation, or publish status.
      */
-    Status Reload(bool fullRebuildAllowed);
-
-    Status RegisterWatchEvents();
+    Status Reload();
 
     Status ReloadInitialSnapshot();
 
     Status StartStateThread();
-
-    void InstallEventHandler();
-
-    void CleanupAfterStartFailure(const char *cleanupMessage);
 
     /**
      * @brief Record one exact-read failure in Observer diagnostics.
@@ -113,15 +103,13 @@ private:
      */
     void RecordReadFailure(const Status &status);
 
-    ICoordinationBackend &backend_;
     TopologyReader &reader_;
     const TopologyKeyHelper &keys_;
     TopologySnapshotState snapshots_;
-    CoordinationEventDispatcher dispatcher_{ 1024 };
     // Protects started_, stopping_, threadExited_, diagnostics_, and stateThread_ join coordination.
     mutable std::mutex stateMutex_;
-    // Uses stateMutex_ and signals changes to threadExited_.
-    std::condition_variable stoppedCv_;
+    // Uses stateMutex_ and signals stop requests and thread exit.
+    std::condition_variable stateCv_;
     Thread stateThread_;
     bool started_{ false };
     bool stopping_{ false };

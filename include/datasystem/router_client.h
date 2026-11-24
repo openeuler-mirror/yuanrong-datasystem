@@ -18,12 +18,12 @@
 #ifndef DATASYSTEM_ROUTER_CLIENT_H
 #define DATASYSTEM_ROUTER_CLIENT_H
  
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
  
-#include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
  
 namespace datasystem {
@@ -31,18 +31,12 @@ class __attribute((visibility("default"))) RouterClient {
 public:
 
     /**
-     * @brief Construct RouterClient. If certificate authentication is enabled for the etcd to be connected, must
-     * specify etcdCa, etcdCert, etcdKey and etcdNameOverride.
-     * @param[in] azName The AZ name of the worker address to be monitored.
-     * @param[in] etcdAddress The Etcd address.
-     * @param[in] etcdCa Root etcd certificate, optional parameters.
-     * @param[in] etcdCert Etcd certificate chain, optional parameters.
-     * @param[in] etcdKey Etcd private key, optional parameters.
-     * @param[in] etcdDNSName Etcd DNS name, optional parameters.
+     * @brief Construct a router for the specified worker AZ.
+     * @note Applications upgrading from the etcd constructor must rebuild and relink with this SDK.
+     * @param[in] azName Worker AZ name.
+     * @param[in] coordinatorAddress Coordinator endpoint or comma-separated endpoints.
      */
-    RouterClient(const std::string &azName, const std::string &etcdAddress, const SensitiveValue &etcdCa = "",
-                 const SensitiveValue &etcdCert = "", const SensitiveValue &etcdKey = "",
-                 const std::string &etcdDNSName = "");
+    RouterClient(const std::string &azName, const std::string &coordinatorAddress);
  
     /**
      * @brief Stop the private Observer/backend chain and release it in reverse ownership order.
@@ -50,8 +44,7 @@ public:
     ~RouterClient();
  
     /**
-     * @brief Connects to etcd to obtain the worker address and listens to the change of the specified AZ worker
-     * address.
+     * @brief Read the first topology from Coordinator and start polling for changes.
      * @return Status of the call.
      */
     Status Init();
@@ -77,13 +70,10 @@ public:
 private:
     struct Impl;
     std::string azName_;
-    std::string etcdAddress_;
-    SensitiveValue etcdCa_;
-    SensitiveValue etcdCert_;
-    SensitiveValue etcdKey_;
-    std::string etcdDNSName_;
-    // Protects construction, access, and destruction of impl_.
-    mutable std::mutex lifecycleMutex_;
+    std::string coordinatorAddress_;
+    std::mutex lifecycleMutex_;
+    // Readers may run during Init. Once published, impl_ lives until destruction.
+    std::atomic<bool> initialized_{ false };
     std::unique_ptr<Impl> impl_;
 };
 }  // namespace datasystem

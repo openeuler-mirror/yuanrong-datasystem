@@ -147,8 +147,8 @@ Status CoordinatorServiceProxyBase::Init()
     }
     CHECK_FAIL_RETURN_STATUS(!initialCandidates.empty(), StatusCode::K_INVALID,
                              "Coordinator Discovery returned no valid addresses");
-    discoveryCache_ =
-        std::make_unique<CoordinatorDiscoveryCache>(coordinatorDiscovery_, std::move(initialCandidates));
+    RETURN_IF_EXCEPTION_OCCURS(discoveryCache_ = std::make_unique<CoordinatorDiscoveryCache>(
+                                   coordinatorDiscovery_, std::move(initialCandidates)));
     auto *discoveryCache = discoveryCache_.get();
     router_ = std::make_unique<CoordinatorLeaderRouter>(CoordinatorLeaderRouter::Dependencies{
         .getCandidateSnapshot = [discoveryCache] { return discoveryCache->GetCandidateSnapshot(); },
