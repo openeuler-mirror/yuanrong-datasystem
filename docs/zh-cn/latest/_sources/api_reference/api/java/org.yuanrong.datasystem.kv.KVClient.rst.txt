@@ -69,21 +69,6 @@ public ByteBuffer get(String key)
 异常：
     :doc:`org.yuanrong.datasystem.DataSystemException` - 如果客户端已关闭（kvClientPtr == 0），将抛出异常，消息为 "Client closed"。
 
-public ByteBuffer get(String key, int timeoutMs)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-调用 Worker 客户端获取键的值。
-
-参数：
-    - **key** - 键。key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
-    - **timeoutMs** - 如果对象未就绪时等待结果返回的超时时间（毫秒）。需要为正整数，0表示不等待。
-
-返回：
-    键对应的值。
-
-异常：
-    :doc:`org.yuanrong.datasystem.DataSystemException` - 如果客户端已关闭（kvClientPtr == 0），将抛出异常，消息为 "Client closed"。
-
 public List<ByteBuffer> get(List<String> keys)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -91,21 +76,6 @@ public List<ByteBuffer> get(List<String> keys)
 
 参数：
     - **keys** - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
-
-返回：
-    值的列表。若有部分数据获取不成功，则对应位置的值为null。
-
-异常：
-    :doc:`org.yuanrong.datasystem.DataSystemException` - 如果客户端已关闭（kvClientPtr == 0），将抛出异常，消息为 "Client closed"。
-
-public List<ByteBuffer> get(List<String> keys, int timeoutMs)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-调用 Worker 客户端获取所有给定键的值。
-
-参数：
-    - **keys** - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
-    - **timeoutMs** - 如果对象未就绪时等待结果返回的超时时间（毫秒）。需要为正整数，0表示不等待。
 
 返回：
     值的列表。若有部分数据获取不成功，则对应位置的值为null。

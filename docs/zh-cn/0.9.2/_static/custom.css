@@ -1,0 +1,180 @@
+/* Custom styles for Furo theme (openYuanrong datasystem) */
+
+/* Improve font */
+html {
+    --pst-font-family-base: 'Microsoft Yahei', 'Inter', sans-serif;
+}
+
+/* Brand colors (blue-based, modern and professional) */
+:root {
+    --openyuanrong-primary: #3498db;
+    --openyuanrong-secondary: #2c3e50;
+    --openyuanrong-accent: #1abc9c;
+    --openyuanrong-code: #27ae60;
+    --openyuanrong-background: #f8f9fa;
+    --openyuanrong-card: #ffffff;
+}
+
+/* Dark mode colors */
+[data-theme="dark"] {
+    --openyuanrong-primary: #5dade2;
+    --openyuanrong-secondary: #e2e8f0;
+    --openyuanrong-accent: #48c9b0;
+    --openyuanrong-code: #7dcea0;
+    --openyuanrong-background: #1a1a1a;
+    --openyuanrong-card: #2d3748;
+}
+
+/* Improved sidebar brand styling */
+.sidebar-brand {
+    padding: 5px 15px 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.sidebar-brand-text {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-logo {
+    max-width: 140px;
+    max-height: 140px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.sidebar-brand-name {
+    font-weight: 700;
+    font-size: 0.95em;
+    color: var(--color-foreground-primary);
+    letter-spacing: -0.2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.sidebar-brand-name:hover {
+    color: var(--color-brand-primary);
+}
+
+/* Hide default project name span from Furo */
+.sidebar-brand-text > span {
+    display: none;
+}
+
+.sidebar-logo:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-logo:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-brand-text span {
+    font-weight: 700;
+    font-size: 1.1em;
+    color: var(--color-foreground-primary);
+    letter-spacing: -0.2px;
+}
+
+/* Improved version switcher styling */
+.sidebar-version-switcher {
+    padding: 8px 15px;
+    border-top: 1px solid var(--color-sidebar-border);
+    border-bottom: 1px solid var(--color-sidebar-border);
+    background-color: var(--color-sidebar-background);
+}
+
+/* Improved code block styling */
+pre code {
+    font-size: 0.95em;
+    line-height: 1.5;
+}
+
+/* Better card styling */
+div.card {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: box-shadow 0.2s;
+}
+
+div.card:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+/* Custom callouts */
+.callout.admonition {
+    border-left: 4px solid var(--openyuanrong-primary);
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 1rem 0;
+    background-color: var(--openyuanrong-background);
+}
+
+/* Lightbox for images */
+#custom-image-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.92);
+    z-index: 9999;
+    cursor: zoom-out;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+}
+
+#custom-modal-close {
+    position: absolute;
+    top: 20px;
+    right: 30px;
+    color: white;
+    font-size: 40px;
+    font-weight: bold;
+    cursor: pointer;
+    z-index: 10000;
+    width: 50px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background-color: rgba(255, 255, 255, 0.1);
+    transition: background-color 0.2s;
+}
+
+#custom-modal-close:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+#custom-modal-image {
+    max-width: 90%;
+    max-height: 80%;
+    object-fit: contain;
+    box-shadow: 0 5px 30px rgba(0, 0, 0, 0.5);
+    cursor: default;
+}
+
+div.body img,
+figure img {
+    cursor: zoom-in !important;
+    transition: opacity 0.2s;
+}
+
+div.body img:hover,
+figure img:hover {
+    opacity: 0.95;
+}

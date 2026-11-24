@@ -39,6 +39,19 @@ bash build.sh -b bazel -d
 bash build.sh -b bazel -j 16
 ```
 
+StreamCache 默认不编译；使用以下参数显式开启或关闭：
+
+```bash
+bash build.sh -b bazel --stream-cache on
+bash build.sh -b bazel --stream-cache off
+
+bazel build --config=release --define=enable_stream_cache=true //bazel:datasystem_sdk
+bazel build --config=release --define=enable_stream_cache=false //bazel:datasystem_sdk
+```
+
+本仓库可用 `--config=stream_cache` 代替开启参数；外部源码 SDK consumer 使用
+`--define=enable_stream_cache=true`。OFF 不交付 Stream 头文件和 Python 接口。
+
 ### 编译产物
 
 编译完成后 `output/` 目录结构：
@@ -471,7 +484,7 @@ cc_binary(
 添加 datasystem 头文件，使用接口：
 
 ```cpp
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 using datasystem::KVClient;
 ```
@@ -577,8 +590,8 @@ int main() {
 ```
 
 `coordinatorDiscovery`在带参数启动时必须非空，带参数入口始终使用它选择并访问Coordinator后端，
-无需在配置中设置`coordinator_address`。命令行和嵌入式静态启动入口才通过`coordinator_address`选择
-Coordinator或ETCD/metastore。`onStart`和`onStop`为可选回调，但必须同时配置或同时留空。
+无需在配置中设置`coordinator_address`。命令行静态启动入口才通过`coordinator_address`选择
+Coordinator或ETCD。`onStart`和`onStop`为可选回调，但必须同时配置或同时留空。
 
 ### 5. 编译命令
 ```bash

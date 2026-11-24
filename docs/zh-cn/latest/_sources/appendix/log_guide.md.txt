@@ -11,8 +11,14 @@ openYuanrong datasystem 的日志分为以下类型：
 5. **流缓存指标日志（sc_metrics）**：流缓存运行数据（需开启 `log_monitor`）。
 6. **容器/进程相关日志**：容器运行日志，管理和监控worker进程的生命周期。
 7. **操作审计日志（operation）**：记录进程启动/停止、构建 Commit、配置初始化及运行时动态配置变更（`UpdateConfig` API 或 `monitor_config_file` 热更新），便于运维追溯版本和配置操作历史。
-8. **资源快照日志（kv_resource）**：`resource.log` 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 `time`/`pod_name`/`cluster_name`，`metrics` 为按 `resource_json_schema` 配置的 metric 组及子字段（需 `json_log_monitor` 且 `log_monitor_exporter=harddisk`；与 `resource.log` 复用同一采集线程和周期，写入由 `json_log_monitor` 独立控制）。
-9. **指标摘要日志（kv_metrics）**：Worker、Coordinator 和 SDK Client 共用的 `metrics_summary` 摘要 JSON-Lines 输出，每行一个完整 JSON 对象，顶层含 `time`/`pod_name`/`cluster_name`，body 与原 `metrics_summary` 摘要格式一致（需 `json_log_monitor`；开启且 JSON exporter 创建成功后，`kv_metrics.log` 每周期完整记录，主 INFO 不再重复输出 `metrics_summary`；JSON exporter 未启用或未创建时，`log_monitor` 控制的 INFO 输出保持原行为）。Worker 输出资源和数据面指标，Coordinator 输出 RPC、Watch 分发及通知指标，SDK Client 输出客户端请求、错误和时延指标。
+8. **资源快照日志（kv_resource）**：JSON-Lines 快照。
+   内容来自 `resource.log`，每行一个 JSON 对象。
+   顶层含时间、Pod、集群和按 schema 配置的指标。
+   固定输出，需 `log_monitor_exporter=harddisk`。
+9. **指标摘要日志（kv_metrics）**：`metrics_summary` JSON-Lines。
+   exporter 成功时写入 `kv_metrics.log`，且不重复输出到主 INFO。
+   创建失败时，`log_monitor` 控制 INFO fallback。
+   各进程输出对应的资源、数据面、RPC、Watch 或 SDK 指标。
 
 日志目录一般为配置项 `log_dir`（如部署下的 `yr_datasystem/logs`）；下文 `/path/yr_datasystem/logs` 表示该目录。
 
@@ -27,15 +33,15 @@ openYuanrong datasystem 的日志分为以下类型：
 | 5 | datasystem_worker | `/path/yr_datasystem/logs/sc_metrics.log` | 流缓存运行数据；由 `log_monitor` 控制是否开启 |
 | 6 | datasystem_worker | `/path/yr_datasystem/logs/container.log` | 容器运行日志，管理和监控worker进程的生命周期 |
 | 7 | datasystem_worker | `/path/yr_datasystem/logs/{log_filename}_operation.log` | 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化快照及运行时 flag 变更（`UpdateConfig` 或配置文件热更新） |
-| 8 | datasystem_worker | `/path/yr_datasystem/logs/kv_resource.log` | 资源快照 JSON-Lines；`resource.log` 同源字段的纯 JSON 输出，顶层 `time`/`pod_name`/`cluster_name`，`metrics` 按 schema 输出已配置的 metric 组；由 `json_log_monitor` 且 `log_monitor_exporter=harddisk` 控制 |
-| 9 | datasystem_worker | `/path/yr_datasystem/logs/kv_metrics.log` | 指标摘要 JSON-Lines；body 与原 `metrics_summary` 摘要格式一致，额外前置 `time`/`pod_name`/`cluster_name`；由 `json_log_monitor` 控制。开启后 `kv_metrics.log` 每周期完整记录，主 INFO 不再重复输出 `metrics_summary`；JSON exporter 未启用或未创建时保持 `log_monitor` 控制的 INFO 输出 |
+| 8 | datasystem_worker | `/path/yr_datasystem/logs/kv_resource.log` | 固定输出的资源快照 JSON-Lines |
+| 9 | datasystem_worker | `/path/yr_datasystem/logs/kv_metrics.log` | 固定输出的指标摘要 JSON-Lines |
 | 10 | Client | `/path/client/ds_client_{pid}.INFO.log`（及 `.WARNING`、`.ERROR` 等；开启 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后为 `/path/client/ds_client.INFO.log`） | SDK 运行日志；基名可由 `KVClientConfig::LogName` 与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖，非空时仅允许英文字母、数字和下划线；显式配置空串时忽略环境变量并使用默认基名 |
 | 11 | Client | `/path/client/ds_client_{pid}_operation.log`（开启 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后为 `/path/client/ds_client_operation.log`） | Client 操作审计日志；记录 Init/Shutdown 及 `UpdateConfig` 动态配置变更 |
 | 12 | Client | `/path/client/ds_client_access_{pid}.log`（开启 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后为 `/path/client/ds_client_access.log`） | SDK 接口访问日志；基名可由 `KVClientConfig::AccessLogName` 与环境变量 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖，非空时仅允许英文字母、数字和下划线；显式配置空串时忽略环境变量并使用默认基名 |
-| 13 | Client | `/path/client/kv_metrics.log` | SDK Client 请求、错误和时延指标的 JSON-Lines 摘要；`ObjectClient` 与 `KVClient` 初始化同一 metrics catalog。`json_log_monitor` 开启且 exporter 创建成功后，每周期完整写入该文件且不再向 Client INFO 重复输出；exporter 未启用或未创建时保持 INFO fallback |
+| 13 | Client | `/path/client/kv_metrics.log` | SDK 指标 JSON-Lines；失败时回退 INFO |
 | 14 | datasystem_coordinator | `/path/yr_datasystem/logs/datasystem_coordinator.INFO.log`（及 `.WARNING`、`.ERROR` 等轮转文件） | Coordinator 运行日志；启动时记录 Git Commit 和 Branch |
 | 15 | datasystem_coordinator | `/path/yr_datasystem/logs/datasystem_coordinator_operation.log` | Coordinator 操作审计日志；记录 Init/Shutdown、构建 Commit、配置初始化及运行时 `UpdateConfig` 变更 |
-| 16 | datasystem_coordinator | `/path/yr_datasystem/logs/kv_metrics.log` | Coordinator RPC、Watch 分发及通知指标的 JSON-Lines 摘要；由 `json_log_monitor` 控制。开启且 exporter 创建成功后 `kv_metrics.log` 每周期完整记录，主 INFO 不再重复输出 `metrics_summary`；JSON exporter 未启用或未创建时保持 `log_monitor` 控制的 INFO 输出 |
+| 16 | datasystem_coordinator | `/path/yr_datasystem/logs/kv_metrics.log` | Coordinator 指标 JSON-Lines |
 
 Worker 和 Coordinator 启动后会在 operation 日志中各写入一条版本事件：
 
@@ -56,9 +62,13 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 | 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
 | 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
-| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| ClientWorkerSCService threadpool \| WorkerWorkerSCService threadpool \| MasterWorkerSCService threadpool \| MasterSCService threadpool \| remote stream push success rate \| shared disk info \| scLocalCache info \| Cache Hit Info \| brpc stream leak count \| deferred cleanup queue size |
+| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| remote stream push success rate \| scLocalCache info \| Cache Hit Info \| brpc stream leak count \| deferred cleanup queue size \| spill IO stats \| object copy watermark |
 | 5 | 流缓存数据日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| sc_metric |
 | 6 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
+
+资源日志的正文保持原有数值列格式，按 `res_metrics.def` 的枚举顺序输出已注册且启用指标的原始值，不增加指标名、标题或版本字段。组间以 ` | ` 分隔，组内多个数值以 `/` 分隔。上表列出全部指标组，未注册或未启用的组会整列省略，不保留占位空列，后续列的位置随之前移，读取时需按当前实际启用的指标组解析。
+
+`resource.log` 与 `kv_resource.log` 共用指标启用条件：`etcd_address` 为空时省略 ETCD 请求成功率指标；Spill 未启用时省略 `spill_hard_disk`、`spill_io_stats`；`eviction_strategy=clock` 时省略 `object_copy_watermark`。原 OC/SC RPC 框架内部线程池的八个失效指标已删除。
 
 ### 日志字段
 
@@ -83,23 +93,13 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | client nums | 5 | 记录已和worker成功建立连接的Client数。最大值为10000 | 
 | object nums | 9 | 记录worker已缓存对象数。按照1亿对象限制数量 | 
 | object total datasize | 13 | 记录worker已缓存对象的大小。按照1T限制大小，长度 13 Byte | 
-| WorkerOcService threadpool | 21 | WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idleNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字 | 
-| WorkerWorkerOcService threadpool | 21 | threadpool使用信息 | 
-| MasterWorkerOcService threadpool | 21 | threadpool使用信息 | 
-| MasterOcService threadpool | 21 | threadpool使用信息 |
-| write ETCD queue | 15 | 队列使用信息 | 
 | ETCDrequest success rate | 6 | 请求成功率，单位 %,保留3位有效数字 | 
 | OBSrequest success rate | 6 | 请求成功率，单位 %,保留3位有效数字 | 
 | Master AsyncTask threadpool | 21 | threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
 | stream nums | 9 | 记录本节点流的个数。本节点上的流：在本节点存在producer或者consumer |
-| ClientWorkerSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
-| WorkerWorkerSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
-| MasterWorkerSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
-| MasterSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
 | remote stream push success rate | 6 | 请求成功率，单位 %,保留3位有效数字 |
-| shared disk info | 47 | 记录共享磁盘使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：usage/physicaleUsage/totalLimit/rate<br>1) usage  已使用的磁盘大小，是已缓存的对象大小总和<br>2) physicaleUsage 已使用的物理磁盘大小<br>3) totalLimit     共享磁盘总大小<br>4) rate   共享磁盘使用率，usage/totalLimit, 保留3位有效数字，单位: % |
 | scLocalCache info | 47 | 记录scLocalCache使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：usedSize/reservedSize/totalLimit/usedRate |
-|Cache Hit Info | 9 | 缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。<br>2) diskHitNum	本地磁盘命中次数. <br>3) l2HitNum	二级缓存命中次数。<br>4) remoteHitNum 远端worker命中次数。<br>5) missNum 未命中次数。
+|Cache Hit Info | 9 | 缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。含 routed 模式（`enableLocalCache=false`）：metadata owner 的 QueryAndGet 内联命中、以及 client 直读副本时副本侧的服务命中（TCP/UB 数据面由 GetObjectRemote 计数；副本与 client 同主机时 SDK 走 SHM 数据面，由既有 Get 服务计数）。client 数据面直读（含 bound 模式 `enableClientDirectPipelineH2D` 直读流水线）同样由数据持有方计数。<br>2) diskHitNum	本地磁盘命中次数. routed 模式下含副本直读命中已 spill 对象。<br>3) l2HitNum	二级缓存命中次数。routed 模式下：TCP/UB 数据面恒为 0 属预期；副本与 client 同主机时走 SHM 数据面（既有 Get 服务），`enable_l2_cache_fallback` 开启（默认开）时可产生非 0 l2Hit。<br>4) remoteHitNum 远端worker命中次数。由发起 worker→worker 拉取的 worker 计数；缩容迁移的 NotifyRemoteGet 内部拉取不计（client 与 device 远程拉取仍计入）；routed 模式 client 直连副本，恒为 0 属预期。<br>5) missNum 未命中次数。routed 模式下：TCP/UB 数据面为 metadata owner 侧"元数据查无活副本"的读 key（metadata-only 查询不计）；同主机 SHM 数据面由服务副本侧按本地未命中计（既有 Get 语义）。
 | brpc stream leak count | 9 | brpc stream 关闭超时后为避免 UAF 而有意泄漏的 `brpc::Controller` 累计次数（进程启动以来单调递增）。正常应为 0 |
 | deferred cleanup queue size | 9 | 当前待延迟清理的 `brpc::Controller` 队列深度；stream 关闭超时时若配置了 `closeNotifier`，Controller 会入队等待 reaper 线程释放 |
 | sc_metric | 1024 | 流缓存运行数据(sc_stream_metric)。worker上一个stream的的流缓存数据，格式：streamName ["exit"]/numLocalProd/numRemoteProd/numLocalCon/numRemoteCon/sharedMemUsed/localMemUsed/numEleSent/numEleRecv/numEleAck/numSendReq/numRecvReq/numPagesCreated/numPagesReleased/numPagesInUse/numPagesCached/numBigPagesCreated/numBigPagesReleased/numLocalProdBlocked/numRemoteProdBlocked/numRemoteConBlocking/retainData/streamState/numProdMaster/numConMaster<br>1) streamName ["exit"] stream名字，带有" exit"表示stream正要关闭<br>2) numLocalProd 本地producer数量<br>3) numRemoteProd - Number of remote workers with atleast one producewill be 0, if no local consumers)<br>4) numLocalCon 本地consumer数量<br>5) numRemoteCon 远端consumer数量<br>6) sharedMemUsed stream使用共享内存大小，单位: Byte<br>7) localMemUsed stream使用本地内存大小，单位: Byte<br>8) numEleSent - Total number of elements produced by all local producers<br>9) numEleRecv - Total number of elements received by all local consumers (value will be 0, if no local consumers)<br>10) numEleAck element acked数量<br>11) numSendReq client调用producer.send()次数<br>12) numRecvReq client调用consumer.receive()次数<br>13) numPagesCreated page创建次数<br>14) numPagesReleased page释放次数<br>15) numPagesInUse page in use数量<br>16) numPagesCached page cached数量<br>17) numBigPagesCreated big element page创建次数<br>18) numBigPagesReleased big element page释放次数<br>19) numLocalProdBlocked 本地producer blocked数量<br>20) numRemoteProdBlocked 远端producer blocked数量<br>21) numRemoteConBlocking 远端consumer blocking数量<br>22) retainData retain data state<br>23) streamState stream state<br>24) numProdMaster master上producer数量<br>25) numConMaster master上consumer数量<br>- 如果worker不是stream的master，24-25会没有数据。如果worker只有master数据，2-23会没有据 |
@@ -114,7 +114,6 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | keep | 1 | 是否手动管理对象生命周期。取值：true/false, 长度：5Byte |
 | Write_mode | 1 | 写数据的模式，影响数据可靠性。取值：int32 |
 | consistency_type | 1 | 数据一致性模式。取值：uint32 |
-| is_seal | 1 | 数据是否不可修改。取值：0/1, 0表示false |
 | is_retry | 1 | 是否为重试场景。取值：0/1 |
 | ttl_second | 32 | TTL时间配置。取值：uint32 |
 | existence | 1 | 配置Key存在时是否允许继续操作，默认允许。取值：int |
@@ -140,8 +139,7 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | `shared_memory` | `memory_usage`、`physical_memory_usage`、`total_limit`、`worker_share_memory_usage` | 共享内存使用 |
 | `spill_hard_disk` | `space_usage`、`physical_space_usage`、`total_limit`、`worker_spill_hard_disk_usage` | Spill 磁盘使用 |
 | `active_client_count` / `object_count` / `object_size` | （标量） | Client 数 / 对象数 / 对象总大小 |
-| `worker_oc_service_thread_pool` 等 OC 线程池组 | 线程池五元组 | 线程池状态 |
-| `etcd_queue` / `etcd_request_success_rate` | 见 schema | ETCD 队列 / 成功率 |
+| `etcd_request_success_rate` | 见 schema | ETCD 请求成功率 |
 | `master_async_tasks_thread_pool` | 线程池五元组 | Master 异步任务线程池 |
 | `oc_hit_num` | 命中统计五元组 | 缓存命中统计 |
 | `brpc_stream_leak_count` | （标量） | brpc stream 有意泄漏计数 |
@@ -194,10 +192,21 @@ access log 中的 `logSampled:true` 表示该请求的 INFO 日志可见（reque
 | Worker 命令行 | `--request_sample_rate=0.5 --access_sample_rate=0.3 --diagnostic_sample_rate=0.4` | `./datasystem_worker --request_sample_rate=0.5` |
 | K8s Helm | `values.yaml` 中设置 `requestSampleRate` / `accessSampleRate` / `diagnosticSampleRate` | 各参数独立生效 |
 | dscli | `dscli start --request_sample_rate 0.2` | — |
-| Embedded Worker | `config.RequestSampleRate(0.5).AccessSampleRate(0.3).DiagnosticSampleRate(0.4)` | 各参数独立生效 |
 | 运行时动态修改 | 修改 `datasystem.config` 中 `request_sample_rate` 等 | — |
 
 默认值均为 `1.0`（全量保留）。
+
+### 关闭本地缓存时的 Get 链路
+
+当 `enableLocalCache=false` 时，Worker access 日志使用不同 action 区分元数据查询和数据拉取阶段：
+
+- `DS_POSIX_QUERY_AND_GET`：metadata owner 查询元数据，并尝试返回内联数据。
+- `DS_POSIX_REMOTE_GET`：选中的 data worker 处理单对象远端拉取。
+- `DS_POSIX_REMOTE_MGET`：选中的 data worker 处理同一批次的多对象远端拉取。
+
+如果 `QueryAndGet` 没有返回 `data_result`，可使用同一 traceID 关联后续的 `REMOTE_GET` 或 `REMOTE_MGET`。
+同机共享内存读取仍进入 `WorkerOCService.Get`，对应 `DS_POSIX_GET`。
+`transportType` 表示请求携带的传输类型；请求未完成读取时记录 `UNKNOWN`。
 
 ### 开发约定：数据面流程与限频宏
 
@@ -248,8 +257,10 @@ latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768
 | `client.process.direct_materialize` | 直读结果校验并转换为 SDK Buffer 的耗时 |
 | `client.process.set` | 客户端 Set/Put 处理耗时（总耗时扣除子 RPC） |
 | `client.rpc.create` | 客户端→worker Create RPC 耗时（Set/Put 的 Create 子阶段） |
+| `client.rpc.create_total` | 走路由（routed）路径时客户端 Create RPC 端到端墙钟耗时，包含远端 worker 执行时间 |
 | `client.process.memory_copy` | 客户端 Set/Put 数据拷贝到共享内存耗时 |
 | `client.rpc.publish` | 客户端→worker Publish RPC 耗时 |
+| `client.rpc.publish_total` | 走路由（routed）路径时客户端 Publish RPC 端到端墙钟耗时，包含远端 worker 执行时间 |
 | `client.urma.ub_transfer` | 客户端 UB（Urma-based 用户态 RDMA）数据传输耗时 |
 | `client.process.create` | 客户端 Create 处理耗时（总耗时扣除 RPC） |
 | `client.process.exist` | 客户端 Exist 处理耗时（总耗时扣除 RPC） |
@@ -276,9 +287,25 @@ latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768
 | Worker 命令行 | `--slow_log_process_slower_than=1000 --slow_log_rpc_slower_than=2000` | 处理>1ms或RPC>2ms时输出 |
 | K8s Helm | `values.yaml` 中设置 `slowLogProcessSlowerThan: 1000` | 同上 |
 | dscli | `dscli start --slow_log_process_slower_than 1000` | 同上 |
-| Embedded Worker | `config.SlowLogProcessSlowerThan(1000).SlowLogRpcSlowerThan(2000)` | 同上 |
 | Client 配置文件 | `DATASYSTEM_CLIENT_CONFIG_PATH` 指定文件中设置 `--client_slow_log_process_slower_than=1000` | Client 侧处理>1ms时输出 |
 | Client API | `UpdateConfig(R"({"client_slow_log_process_slower_than":"1000"})")` | 运行时动态修改 Client 侧门限 |
 | 运行时动态修改 | 修改 `datasystem.config` 中对应参数 | — |
 
 默认值为 `2000`/`5000`（进程内2ms/RPC 5ms），完全向后兼容，零开销。
+
+## URMA 轮询耗时日志阈值
+
+Worker 使用 `--urma_log_threshold_us`，C++ Client 使用 `KVClientConfig::Builder::UrmaLogThresholdUs`。
+默认 500 微秒，范围 `[1, 4294967295]`；设为 250 可恢复原诊断灵敏度。
+
+仅控制 URMA 轮询模式下的三类 INFO 日志，耗时严格超过阈值时触发：
+
+- `[URMA_ELAPSED_THREAD_SHED]`：轮询间隔。
+- `[URMA_ELAPSED_POLL_JFC]`：单次 `urma_poll_jfc` 耗时。
+- `[URMA_ELAPSED_THREAD_SHED]`：`nanosleep` 休眠耗时。
+
+实际输出受日志级别控制，与 `enable_urma_perf` 独立。Worker 修改后需重启；Client 在进程首次
+`KVClient::Init` 时生效，后续实例共享该值，不支持热更新。
+回退旧版本前删除新增 Worker 参数；使用新 Builder 方法需配套新 SDK。
+
+对象元数据退出 ETCD 后，resource.log 删除队列位置列，后续列前移；按位置解析的外部消费方需同步升级。kv_resource.log 的 v0 表示 JSON 结构版本，指标组为可选字段集合，消费方必须容忍组缺失；本次移除队列组，不改变 JSON 结构版本。仓库资源分析脚本兼容含队列列与不含队列列的日志。

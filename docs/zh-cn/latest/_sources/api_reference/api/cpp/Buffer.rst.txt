@@ -123,16 +123,6 @@ Buffer
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示发布成功，否则返回其他错误码。
 
-    .. cpp:function:: Status Seal(const std::unordered_set<std::string> &nestedKeys = {})
-
-        发布不可变数据到服务器。
-
-        参数：
-            - **nestedKeys** - 嵌套对象的键集合，默认为空集合。
-
-        返回：
-            返回值状态码为 ``StatusCode::K_OK`` 时表示发布成功，否则返回其他错误码。
-
     .. cpp:function:: Status InvalidateBuffer()
 
         使当前主机上的数据失效。

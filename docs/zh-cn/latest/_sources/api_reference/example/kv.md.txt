@@ -11,19 +11,19 @@ openYuanrong datasystem (下文中称为数据系统)提供了近计算 KV 缓�
 :::{tab-item} Python
 
 ```python
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import KVClient
 
-client = DsClient("127.0.0.1", 31501)
+client = KVClient("127.0.0.1", 31501)
 client.init()
 
 key = "key"
 expected_val = b"value"
-client.kv().set(key, expected_val)
+client.set(key, expected_val)
 
-val = client.kv().get([key])
+val = client.get([key])
 assert val[0] == expected_val
 
-client.kv().delete([key])
+client.delete([key])
 ```
 
 :::
@@ -32,14 +32,14 @@ client.kv().delete([key])
 
 ```cpp
 #include <cstdio>
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 using namespace datasystem;
 
 int main()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<KVClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -48,38 +48,38 @@ int main()
     std::string key = "testKey";
     std::string value = "Hello kv client";
     std::string value2 = "Hello modify";
-    Status status = client->KV()->Set(key, value);
+    Status status = client->Set(key, value);
     if (!status.IsOk()) {
         fprintf(stderr, "Set failed\n");
         return -1;
     }
 
     std::string getValue;
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     if (!status.IsOk() || getValue != value) {
         fprintf(stderr, "Get failed\n");
         return -1;
     }
 
-    status = client->KV()->Set(key, value2);
+    status = client->Set(key, value2);
     if (!status.IsOk()) {
         fprintf(stderr, "Set failed\n");
         return -1;
     }
 
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     if (!status.IsOk() || getValue != value2) {
         fprintf(stderr, "Get failed\n");
         return -1;
     }
 
-    status = client->KV()->Del(key);
+    status = client->Del(key);
     if (!status.IsOk()) {
         fprintf(stderr, "Del failed\n");
         return -1;
     }
 
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     if (!status.IsError()) {
         fprintf(stderr, "Get after delete should fail\n");
         return -1;
@@ -125,7 +125,7 @@ KV 接口支持 Causal 级别数据读写一致性。
 
 ```cpp
 #include <cstdio>
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 using namespace datasystem;
 
@@ -146,7 +146,7 @@ int main()
 
     ConnectOptions connectOptions;
     connectOptions.serviceDiscovery = serviceDiscovery;
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<KVClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -160,7 +160,7 @@ int main()
 使用 `CoordinatorServiceDiscovery` 从 Coordinator 获取可用 Worker。初始化时选择并固定访问一个 Coordinator 地址。
 
 ```cpp
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 CoordinatorServiceDiscoveryOptions sdOpts;
 sdOpts.serviceAddress = "127.0.0.1:31511";
@@ -172,7 +172,7 @@ ASSERT_TRUE(serviceDiscovery->Init().IsOk());
 
 ConnectOptions connectOptions;
 connectOptions.serviceDiscovery = serviceDiscovery;
-auto client = std::make_shared<DsClient>(connectOptions);
+auto client = std::make_shared<KVClient>(connectOptions);
 ASSERT_TRUE(client->Init().IsOk());
 ```
 
@@ -198,8 +198,6 @@ ASSERT_TRUE(serviceDiscovery->Init().IsOk());
 
 Python KVClient 使用 `service_discovery` 参数接入服务发现，不需要预先指定 Worker 的 `host` 和 `port`。
 当同时传入 `service_discovery` 与 `host`/`port` 时，KVClient 会使用 `service_discovery` 并忽略 `host`/`port`。
-若期望同一个 KVClient 在当前连接的 Worker 故障后切换到其他已发现 Worker，需要同时设置
-`enable_cross_node_connection=True`。
 
 ```python
 from yr.datasystem import (
@@ -218,7 +216,7 @@ options.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
 service_discovery = CoordinatorServiceDiscovery(options)
 service_discovery.init()
 
-client = KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+client = KVClient(service_discovery=service_discovery)
 client.init()
 ```
 
@@ -251,7 +249,7 @@ spillFileMaxSizeMb: 200
 # some files will be temporarily closed to prevent exceeding the maximum system limit. You need reduce this value if your system resources are limited.
 # The valid range is greater than or equal to 8.
 spillFileOpenLimit: 512
-# Disable readahead can mitigate the read amplification problem for offset read, default is true
+# Disable readahead when internal oversized range reads would amplify I/O; default is true
 spillEnableReadahead: true
 ```
 
@@ -281,13 +279,13 @@ global:
 
 数据系统 KV 接口提供可靠性语义，在数据写入时，通过 **writeMode** 参数配置数据可靠性级别。仅当 **writeMode** 配置为 ***WRITE_THROUGH_L2_CACHE*** 或 ***WRITE_BACK_L2_CACHE*** 时才保证数据可靠性，否则当出现故障或空间不足时，数据可能丢失。  
 数据系统通过对接外部存储组件作为二级缓存实现数据可靠性。当前支持的二级缓存组件有：
-distributed_disk / OBS / SFS。
+OBS / SFS。
 在集群部署时，需要在数据系统的部署参数中配置二级缓存相关参数，若未配置，则在 KV 写入时 **writeMode** 参数指定为 ***WRITE_THROUGH_L2_CACHE*** 或 ***WRITE_BACK_L2_CACHE*** 时会写入失败。
 
 集群部署时通过以下参数指定二级缓存类型。
 
 ```yaml
-# 指定二级缓存的类型。可选值为：'distributed_disk', 'obs', 'sfs'.
+# 指定二级缓存的类型。可选值为：'obs', 'sfs'.
 # 默认值为'none'，表示不支持二级缓存。
 l2CacheType: "none"
 ```
@@ -295,23 +293,6 @@ l2CacheType: "none"
 对接各类外部组件的配置参数如下：
 ::::{tab-set}
 
-:::{tab-item} distributed_disk
-
-```yaml
-distributedDisk:
-  # The root path used by distributed disk storage.
-  path: ""
-  # The maximum size in MB of a single distributed disk data file.
-  maxDataFileSizeMb: 1024
-  # The maximum time interval in milliseconds before distributed disk group commit flushes pending writes.
-  syncIntervalMs: 1000
-  # The batch size threshold in bytes that triggers distributed disk group commit flush.
-  syncBatchBytes: 33554432
-  # The fixed interval in seconds between distributed disk background compact runs.
-  compactIntervalS: 3600
-```
-
-:::
 
 :::{tab-item} obs
 
