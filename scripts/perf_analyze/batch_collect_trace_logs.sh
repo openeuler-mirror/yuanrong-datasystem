@@ -13,8 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Collect trace reports from one task directory or from a list of task directories.
-# Each task directory must contain collected/ and collected_worker_logs/.
+# Description: Collect error or latency-bucket traces from one log root or a list of task roots.
+# Usage: bash scripts/perf_analyze/batch_collect_trace_logs.sh -t core -f logs; use -t time or coreandtime for
+#   latency buckets; results are under ./collect/.
+
+# Collect trace reports from one collection root or from a list of roots.
 
 set -euo pipefail
 
@@ -25,14 +28,18 @@ OUTPUT_ROOT="$(pwd -P)/collect"
 MODE=""
 SINGLE_DIR=""
 LIST_FILE=""
+PREFIX="jingpai"
+CROSS_NODE=0
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") -t <core|time|coreandtime> [-f <task-dir> | -l <list-file>]
+Usage: $(basename "$0") -t <core|time|coreandtime> [-f <root-dir> | -l <list-file>] [-p <prefix>]
 
-Collect trace reports from task directories. Each task directory must contain
-collected/ and collected_worker_logs/. The collector is copied into every task
-directory before execution. Results are written under ./collect/.
+Collect trace reports from collection roots. By default, each run first looks
+for second-level directories beginning with jingpai; when none exist, it falls
+back to the standard collected/ and collected_worker_logs/ layout. The
+collector validates client logs from ds_client_access* and worker logs from
+access* filenames. Results are written under ./collect/.
 
 Options:
   -t MODE       Collection mode: core, time, or coreandtime (required).
@@ -40,6 +47,9 @@ Options:
   -f TASK_DIR   Collect one task directory. Relative paths such as ./case are supported.
   -l LIST_FILE  Collect each task directory listed in this text file. Blank lines and
                 lines beginning with # are ignored.
+  -p PREFIX     Select second-level mixed collection directories by prefix
+                (default: jingpai).
+  --cross-node  Fetch and merge the same root from Kubernetes nodes first.
   -h, --help    Show this help message.
 
 Examples:
@@ -55,6 +65,9 @@ Examples:
   # Process one task directory per line in dirs.txt.
   $(basename "$0") -t core -l dirs.txt
   $(basename "$0") -t time -l dirs.txt
+
+  # Select zhaoipai* rather than the default jingpai* directories.
+  $(basename "$0") -t core -f ./rootDir -p zhaoipai
 EOF
 }
 
@@ -82,6 +95,15 @@ while [ "$#" -gt 0 ]; do
             require_option_value "$@"
             LIST_FILE="$2"
             shift 2
+            ;;
+        -p)
+            require_option_value "$@"
+            PREFIX="$2"
+            shift 2
+            ;;
+        --cross-node)
+            CROSS_NODE=1
+            shift
             ;;
         -h|--help)
             usage
@@ -129,6 +151,7 @@ fi
 
 mkdir -p "$OUTPUT_ROOT"
 echo "Mode: $MODE"
+echo "Collection prefix: $PREFIX"
 echo "Output directory: $OUTPUT_ROOT"
 
 process_dir() {
@@ -139,6 +162,8 @@ process_dir() {
     local collect_subdir
     local destination
     local src_dir
+    local -a collector_args
+    local -a cross_node_args
 
     echo
     echo "========== Processing: $dir =========="
@@ -148,13 +173,17 @@ process_dir() {
         return 1
     fi
 
-    if [ ! -d "$dir_abs/collected" ]; then
-        echo "  [SKIP] collected/ not found: $dir_abs"
-        return 1
+    if compgen -G "$dir_abs/$PREFIX*" > /dev/null; then
+        collector_args=(-f "$dir_abs" -p "$PREFIX")
+        echo "  [OK] Using mixed collection prefix: $PREFIX"
+    else
+        collector_args=(-f "$dir_abs")
+        echo "  [OK] No $PREFIX* directory found; using standard collected layout"
     fi
-    if [ ! -d "$dir_abs/collected_worker_logs" ]; then
-        echo "  [SKIP] collected_worker_logs/ not found: $dir_abs"
-        return 1
+    if [ "$CROSS_NODE" -eq 1 ]; then
+        cross_node_args=(--cross-node)
+    else
+        cross_node_args=()
     fi
 
     if [ "$TRACE_COLLECTOR" -ef "$dir_abs/trace_collector.py" ]; then
@@ -176,14 +205,14 @@ process_dir() {
         fi
 
         if [ "$output_mode" = "all-core" ]; then
-        echo "  [RUN] python3 ./trace_collector.py --type all_core --max-traces 500 --jobs 200"
-        if ! (cd -- "$dir_abs" && python3 ./trace_collector.py --type all_core --max-traces 500 --jobs 200); then
+        echo "  [RUN] python3 ./trace_collector.py ${collector_args[*]} --type all_core --max-traces 500 --jobs 200"
+        if ! (cd -- "$dir_abs" && python3 ./trace_collector.py "${collector_args[@]}" "${cross_node_args[@]}" --type all_core --max-traces 500 --jobs 200); then
             echo "  [FAIL] trace_collector.py failed in $dir_abs"
             return 1
         fi
         else
         echo "  [RUN] Collecting DS_KV_CLIENT_GET and DS_KV_CLIENT_SET latency buckets"
-        if ! (cd -- "$dir_abs" && python3 ./trace_collector.py --type time-buckets \
+        if ! (cd -- "$dir_abs" && python3 ./trace_collector.py "${collector_args[@]}" "${cross_node_args[@]}" --type time-buckets \
             --ops DS_KV_CLIENT_GET,DS_KV_CLIENT_SET \
             --ranges 5000,7000 7000,10000 10000,20000 20000 \
             --max-traces 500 --jobs 200); then

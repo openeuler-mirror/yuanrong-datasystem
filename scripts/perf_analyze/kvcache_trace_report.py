@@ -1,10 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Description: Correlate client and worker GET/SET traces into disk-sharded offline latency reports.
+# Usage: python3 scripts/perf_analyze/kvcache_trace_report.py -f logs -type setandget --output-dir report; use
+#   --help for layout, filters, and cross-node collection.
 """
 KVCache Trace Log Latency Analysis Tool - High Performance Version
 
 Optimized for processing tens of millions of log records:
 - Multi-process parallel log parsing
+- Client-derived Trace allow-list before Worker field/JSON parsing
 - TraceId-based disk sharding (constant memory footprint)
 - Zero-regex parsing using str.split()
 - Streaming output, no in-memory result accumulation
@@ -15,6 +33,10 @@ Expected collected-log layout (directories may have extra nesting):
   <task>/collected/clients/.../ds_client*INFO*.log[.gz]
   <task>/collected_worker_logs/workers/.../access*.log[.gz]
   <task>/collected_worker_logs/workers/.../kvcache*INFO*.log[.gz]
+
+Mixed layout selected with -p (directories may have extra nesting):
+  <rootDir>/jingpai*/client*/ds_client_access*.log[.gz]
+  <rootDir>/jingpai*/worker*/access*.log[.gz]
 
 Use this tool for offline GET/SET latency diagnosis in meta-owner,
 same-node, and local-cache deployments.  Client and worker evidence is
@@ -39,7 +61,7 @@ Overview statistic definitions (the overview table and trend chart use different
 | SDK/Worker/RPC 阶段 | client/worker access 与 `RPC_FRAMEWORK_SLOW` | 每 Trace 保留对应阶段值；RPC 非服务端=`max(0,e2e_us-server_exec_us)`，网络=`network_residual_us`，框架=非服务端-网络 | 仅该阶段有效正值样本；样本数为有效值数；占比=阶段平均/全请求端到端平均 |
 | URMA 通信/调度 | `URMA_ELAPSED_TOTAL`、调度字段 | 每 Trace 取 URMA `cost` 最大值（ms→us）；调度取最大值 | 仅有效正值样本；属于诊断阶段，不保证与其它阶段可加 |
 | Worker Access | worker `access*.log` | 同 Trace 多条记录取 `latency_us` 最大值 | 仅有效正值样本；可能与内部阶段重叠 |
-| URMA 并发数 | URMA 记录 `urma_inflight_wr_cnt` | 同 Trace 取最大值 | 仅有效正值样本；单位为个，不是时延 |
+| URMA 并发数 | URMA 记录 `urma_inflight_wr_count` | 同 Trace 取最大值 | 仅有效正值样本；单位为个，不是时延 |
 | sleep 时间 | worker `.info` nanosleep | 窗口基数=`2 × UB 通信数`；真实样本不足补 0 | avg/P99 等按补零后的基数；样本数列显示真实记录数，非请求时延 |
 | URMA PERF 采样 | worker `.info` 周期采样 | 每条采样先按指标读取 avg/max/P99/P99.99；窗口内取各统计量最大值 | 独立运行时采样，非请求级数据；不能与请求阶段相加 |
 | 趋势窗口 | 过滤后的请求及 `.info` | 请求阶段每窗口以全部请求为分母，缺失阶段按 0；窗口宽度由 `--window-ms` 决定 | 趋势 avg/P99/P99.99/max 仅反映该窗口，和总览阶段统计口径不同 |
@@ -52,6 +74,10 @@ Performance, outputs, and failure interpretation:
   traversing the logs again.  Temporary JSONL/.info shards are process-local and
   removed on success and failure.  -qps false avoids 10ms QPS aggregation and its
   HTML payload, reducing runtime memory and browser render cost for long runs.
+  Client access files are parsed first in parallel; request type/time/latency/error
+  filters form the Trace allow-list used by all Worker parsers. RPC and URMA
+  diagnostics remain enabled, but unrelated Worker lines are rejected before
+  detailed field extraction and JSON encoding.
   A report with zero requests usually means ds_client_access records were absent;
   a missing worker stage means no correlated worker evidence was found.
 
@@ -65,7 +91,9 @@ Arguments not shown in the examples:
   the .info sleep threshold in microseconds (default 250).
 
 Input constraints:
-  -f names exactly one task directory; -list supplies one task per non-comment line.
+  -f names one collection root. Standard collected/ and collected_worker_logs/
+  layouts are discovered automatically. With -p, only matching second-level
+  mixed collection directories are scanned. -list supplies one task per non-comment line.
   Relative list entries use --client-path/--worker-path when provided, otherwise cwd.
   -j, --shard-bits, and --window-ms must be positive.
   -qps accepts true/false (also 1/0, yes/no).  false skips 10ms QPS aggregation
@@ -95,11 +123,153 @@ import gzip
 import json
 import multiprocessing as mp
 import os
+import pickle
 import shutil
 import sys
+import subprocess
+import shlex
 import tempfile
 import time
+import base64
+import io
+import tarfile
+import atexit
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def cross_log(message):
+    now = time.time()
+    stamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))
+    print(f'[{stamp}.{int(now * 1000) % 1000:03d}] [cross-node] {message}', flush=True)
+
+
+def prefilter_archive_command(root, prefix, request_types=None, traces=None, phase='client'):
+    """Build a node-local KVCache filter command for the two cross-node passes."""
+    script = '''import gzip,json,pathlib,sys,tarfile,tempfile,shutil
+r=pathlib.Path(sys.argv[1]).resolve(); p=sys.argv[2] or None; wanted=set(json.loads(sys.argv[3])); phase=sys.argv[4]
+s=[x for x in r.iterdir() if x.is_dir() and (p is None or x.name.startswith(p))]
+if p is None: s=[x for x in (r/'collected',r/'collected_worker_logs') if x.is_dir()] or s
+def rd(x):
+ o=gzip.open if x.name.endswith('.gz') else open
+ with o(x,'rt',encoding='utf-8',errors='replace') as f: yield from f
+ca=[]; wa=[]; ci=[]; wi=[]
+for d in s:
+ for x in d.rglob('*'):
+  if not x.is_file(): continue
+  n=x.name.lower()
+  if n.startswith('ds_client_access') and n.endswith(('.log','.log.gz')): ca.append(x)
+  elif n.startswith('access') and not n.startswith('ds_client_access') and n.endswith(('.log','.log.gz')): wa.append(x)
+  elif 'ds_client' in n and 'info' in n: ci.append(x)
+  elif 'kvcache' in n and 'info' in n: wi.append(x)
+def tid(line):
+ q=line.split('|'); return q[5].strip() if len(q)>5 else ''
+traces=set(x.strip() for x in sys.stdin.read().splitlines() if x.strip())
+client=[]
+if phase == 'client':
+ for x in ca:
+  for l in rd(x):
+   if wanted and not any(v in l for v in wanted): continue
+   t=tid(l)
+   if t: traces.add(t); client.append(l)
+worker=[]
+for x in wa:
+ for l in rd(x):
+  if any(t in l for t in traces): worker.append(l)
+traces.update(tid(l) for l in worker if tid(l))
+out=pathlib.Path(tempfile.mkdtemp(prefix='kvcache_filter_'))/r.name
+(out/'collected'/'client').mkdir(parents=True); (out/'collected_worker_logs'/'worker').mkdir(parents=True)
+if phase == 'client':
+ (out/'collected'/'client'/'ds_client_access.log').write_text(''.join(client),encoding='utf-8')
+else:
+ (out/'collected_worker_logs'/'worker'/'access.log').write_text(''.join(worker),encoding='utf-8')
+def emit(paths,target):
+ with target.open('w',encoding='utf-8') as z:
+  for x in paths:
+   for l in rd(x):
+    if any(t in l for t in traces) or (target.name.startswith('kvcache') and any(v in l for v in ('POLL GAP','nanosleep','URMA PERF','lastPollEndToThisPollStart'))): z.write(l)
+if phase == 'worker':
+ emit(ci,out/'collected'/'client'/'ds_client.INFO.log')
+ emit(wi,out/'collected_worker_logs'/'worker'/'kvcache.INFO.log')
+with tarfile.open(fileobj=sys.stdout.buffer,mode='w|gz',compresslevel=1) as a: a.add(out,arcname=r.name)
+shutil.rmtree(out.parent,ignore_errors=True)
+'''
+    enc = base64.b64encode(script.encode()).decode()
+    return 'python3 -c "import base64;exec(base64.b64decode({}))" {} {} {} {}'.format(
+        shlex.quote(repr(enc)), shlex.quote(str(root)), shlex.quote(prefix or ''),
+        shlex.quote(json.dumps(list(request_types or []))), shlex.quote('client' if traces is None else 'worker') )
+
+
+def stage_cross_node(root: str, jobs: int, prefix=None, request_types=None) -> str:
+    base = Path(root).expanduser().resolve()
+    started = time.monotonic()
+    cross_log(f'phase=discover_nodes enter root={base} jobs={jobs}')
+    payload = json.loads(subprocess.check_output(['kubectl', 'get', 'nodes', '-o', 'json'], text=True))
+    targets = []
+    for item in payload.get('items', []):
+        ip = next((entry.get('address') for entry in item.get('status', {}).get('addresses', [])
+                   if entry.get('type') == 'InternalIP'), None)
+        if ip:
+            targets.append((item.get('metadata', {}).get('name') or ip, ip))
+    if not targets:
+        raise RuntimeError('kubectl returned no nodes with InternalIP')
+    cross_log(f'phase=discover_nodes leave status=ok nodes={len(targets)} elapsed={time.monotonic() - started:.3f}s targets={targets}')
+    stage = Path(tempfile.mkdtemp(prefix='perf_analyze_cross_node_'))
+    atexit.register(shutil.rmtree, stage, ignore_errors=True)
+    marker = stage / '.cross_node_roots'
+    marker.write_text('[]', encoding='utf-8')
+    cross_log(f'phase=stage_created path={stage} staged_bytes={sum(path.stat().st_size for path in stage.rglob("*") if path.is_file())}')
+    def fetch(target, phase='client', traces=None):
+        node, ip = target
+        fetch_started = time.monotonic()
+        cross_log(f'node={node} phase=ssh_tar enter ip={ip}')
+        find_expr = "-type f \\( -name 'ds_client_access*.log*' -o -name 'ds_client*INFO*.log*' -o -name 'access*.log*' -o -name 'kvcache*INFO*' -o -iname '*kv_metrics*' \\)"
+        scope = (f"find {shlex.quote(base.name)} -mindepth 1 -maxdepth 1 -type d -name {shlex.quote(prefix + '*')} -exec find {{}} {find_expr} -print0 \\;" if prefix else f"find {shlex.quote(base.name)} \\( -path '*/collected' -o -path '*/collected_worker_logs' \\) -type d -exec find {{}} {find_expr} -print0 \\;")
+        command = (prefilter_archive_command(base, prefix, request_types, traces, phase) if request_types else f"cd -- {shlex.quote(str(base.parent))} && {scope} | "
+                   "tar --null --files-from=- -I 'gzip -1' -cf -")
+        result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', f'root@{ip}', command],
+                                input=(('\n'.join(traces) + '\n').encode() if traces else None),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if result.returncode:
+            return node, False, result.stderr.decode(errors='replace').strip(), time.monotonic() - fetch_started
+        destination = stage / re.sub(r'[^A-Za-z0-9_.-]+', '_', node)
+        destination.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r:gz') as archive:
+            archive.extractall(destination, filter='data')
+        staged_bytes = sum(path.stat().st_size for path in destination.rglob('*') if path.is_file())
+        return node, True, str(destination), len(result.stdout), staged_bytes, time.monotonic() - fetch_started
+    def run_pass(phase, traces=None):
+        failures = []
+        with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(targets)))) as pool:
+            futures = [pool.submit(fetch, target, phase, traces) for target in targets]
+            for future in futures:
+                node, ok, value, *extra = future.result()
+                if not ok:
+                    failures.append(f'{node}: {value}')
+                    cross_log(f'node={node} phase={phase} leave status=failed elapsed={extra[0]:.3f}s error={value}')
+                else:
+                    cross_log(f'node={node} phase={phase} leave status=ok elapsed={extra[2]:.3f}s transfer_bytes={extra[0]} staged_bytes={extra[1]} stage={value}')
+                    roots = json.loads(marker.read_text(encoding='utf-8'))
+                    root_value = str(Path(value) / base.name)
+                    if root_value not in roots:
+                        roots.append(root_value)
+                    marker.write_text(json.dumps(roots), encoding='utf-8')
+        return failures
+    failures = run_pass('client') if request_types else run_pass('archive')
+    if request_types and not failures:
+        traces = set()
+        for path in Path(stage).rglob('ds_client_access.log'):
+            for line in path.read_text(errors='replace').splitlines():
+                fields = line.split('|')
+                if len(fields) > 5 and fields[5].strip():
+                    traces.add(fields[5].strip())
+        cross_log(f'phase=global_trace_union traces={len(traces)}')
+        failures = run_pass('worker', traces)
+    if len(failures) == len(targets):
+        raise RuntimeError('all cross-node fetches failed')
+    staged_bytes = sum(path.stat().st_size for path in stage.rglob('*') if path.is_file())
+    cross_log(f'phase=stage leave status=ok elapsed={time.monotonic() - started:.3f}s stage={stage} staged_bytes={staged_bytes} succeeded={len(targets) - len(failures)} failed={len(failures)}')
+    return str(stage)
 
 # =============================================================================
 # CONFIG
@@ -109,6 +279,33 @@ CLIENT_ACCESS_PATTERNS = ['ds_client_access*.log*']
 CLIENT_INFO_PATTERNS = ['ds_client*INFO*.log*']
 WORKER_ACCESS_PATTERNS = ['access*.log*']
 WORKER_INFO_PATTERNS = ['kvcache*INFO*.log*', 'kvcache*INFO*']
+PARALLEL_ANALYSIS_MIN_BYTES = 64 * 1024 * 1024
+COMPACT_KEYS = {
+    '_cat': 'c', '_sub': 'u', 'trace_id': 'q', 'timestamp': 't', 'timestamp_us': 'T',
+    'status_code': 's', 'request_type': 'r', 'latency_us': 'l', 'data_size': 'z',
+    'params': 'p', 'ip': 'g', 'local_ip': 'o', 'client_ip': 'i', 'error': 'e',
+    'rpc_type': 'y', 'method': 'm', 'framework_us': 'f', 'e2e_us': 'E',
+    'client_req_framework_us': 'a', 'remote_processing_us': 'b',
+    'client_rsp_framework_us': 'd', 'server_req_queue_us': 'h', 'server_exec_us': 'x',
+    'server_rsp_queue_us': 'j', 'network_residual_us': 'n', 'server_req_framework_us': 'k',
+    'client_req_network_us': 'v', 'client_rsp_network_us': 'w', 'master_ip': 'M',
+    'total_cost_ms': 'C', 'elapsed_ms': 'L', 'urma_total_ms': 'U', 'urma_inflight': 'I',
+    'src_address': 'S', 'target_address': 'D', 'urma_sched_us': 'H',
+    'worker_access_latency_max': 'A', 'urma_inflight_max': 'N', 'path_role': 'R',
+    'latency_segmentation': 'G', 'sdk_processing_us': 'P', 'master_processing_us': 'Q',
+    'worker_access_latency_us': 'W', 'remote_worker_processing_us': 'O',
+    'remote_worker_internal_us': 'V', 'local_worker_internal_us': 'X',
+    'client_urma_processing_us': 'Y', 'urma_processing_us': 'Z',
+}
+EXPAND_KEYS = {value: key for key, value in COMPACT_KEYS.items()}
+REQUEST_TOKENS = {'DS_KV_CLIENT_GET': 'G', 'DS_KV_CLIENT_SET': 'S', 'DS_POSIX_QUERY_AND_GET': 'Q'}
+EXPAND_REQUEST_TOKENS = {value: key for key, value in REQUEST_TOKENS.items()}
+
+
+def elapsed_log(started_at: str, started: float) -> str:
+    return (f'start={started_at} end={time.strftime("%Y-%m-%d %H:%M:%S")} '
+            f'elapsed={time.perf_counter() - started:.2f}s')
+
 
 MARKER_ZMQ_SLOW = b'[ZMQ_RPC_FRAMEWORK_SLOW]'
 MARKER_BRPC_SLOW = b'[BRPC_RPC_FRAMEWORK_SLOW]'
@@ -125,6 +322,41 @@ MARKER_POLL_GAP = b'[URMA_ELAPSED_THREAD_SHED]'
 MARKER_URMA_PERF = b'[URMA_PERF]'
 MARKER_WORKER_CREATE = b'Worker Create'
 MARKER_PUBLISH_DONE = b'Publish done'
+
+
+def compact_record(value):
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if key == 'timestamp' and '_cat' in value:
+                continue
+            if key == 'request_type':
+                item = REQUEST_TOKENS.get(item, item)
+            out[COMPACT_KEYS.get(key, key)] = compact_record(item)
+        return out
+    if isinstance(value, list):
+        return [compact_record(item) for item in value]
+    return value
+
+
+def expand_record(value):
+    if isinstance(value, dict):
+        out = {EXPAND_KEYS.get(key, key): expand_record(item) for key, item in value.items()}
+        if 'request_type' in out:
+            out['request_type'] = EXPAND_REQUEST_TOKENS.get(out['request_type'], out['request_type'])
+        if 'timestamp_us' in out and 'timestamp' not in out:
+            out['timestamp'] = us_to_timestamp(out['timestamp_us'])
+        return out
+    if isinstance(value, list):
+        return [expand_record(item) for item in value]
+    return value
+
+CLIENT_INFO_MARKERS = (MARKER_ZMQ_SLOW, MARKER_BRPC_SLOW, MARKER_URMA)
+WORKER_INFO_TRACE_MARKERS = (
+    MARKER_ZMQ_SLOW, MARKER_BRPC_SLOW, MARKER_QUERY_MASTER, MARKER_CREATEMETA,
+    MARKER_CREATE_META_TO_MASTER, MARKER_GET_DONE, MARKER_SET_DONE, MARKER_GET_RECV,
+    MARKER_REMOTE_PULL, MARKER_REMOTE_DONE, MARKER_URMA, MARKER_WORKER_CREATE, MARKER_PUBLISH_DONE,
+)
 
 
 # =============================================================================
@@ -152,6 +384,36 @@ def parse_kv(field: bytes) -> Dict[str, str]:
     return result
 
 
+URMA_TIMEOUT_INVALID_U64 = (1 << 64) - 1
+
+
+def extract_first_int(line: bytes, *markers: bytes) -> Optional[int]:
+    """Read the first usable integer across the pre/post-9a2564 URMA formats."""
+    for marker in markers:
+        value = extract_int_b(line, marker)
+        if value is not None and value != URMA_TIMEOUT_INVALID_U64:
+            return value
+    return None
+
+
+def extract_urma_address(line: bytes, *markers: bytes) -> Optional[str]:
+    """Read a comma-delimited URMA address field from either log naming scheme."""
+    for marker in markers:
+        start = line.find(marker)
+        if start == -1:
+            continue
+        start += len(marker)
+        end = line.find(b',', start)
+        if end == -1:
+            end = line.find(b' ', start)
+        if end == -1:
+            end = len(line)
+        value = line[start:end].strip()
+        if value:
+            return value.decode('utf-8', errors='replace')
+    return None
+
+
 def ts_to_us(ts: bytes) -> int:
     """ISO timestamp -> microseconds since epoch (UTC)."""
     try:
@@ -163,6 +425,12 @@ def ts_to_us(ts: bytes) -> int:
         return epoch * 1_000_000 + int(s[20:26])
     except Exception:
         return 0
+
+
+def us_to_timestamp(ts_us: int) -> str:
+    if not ts_us:
+        return ''
+    return datetime.fromtimestamp(ts_us / 1_000_000, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')
 
 
 def shard_id(tid: bytes, bits: int) -> int:
@@ -201,6 +469,40 @@ def expand(paths: List[str]) -> List[str]:
         elif os.path.isdir(p):
             d.add(os.path.abspath(p))
     return sorted(d)
+
+
+def discover_log_roots(root: str, prefix: Optional[str] = None) -> Tuple[List[str], List[str]]:
+    """Discover client and worker log directories below one collection root."""
+    base = Path(root).expanduser().resolve()
+    if not base.is_dir():
+        raise ValueError(f'input directory does not exist: {base}')
+    marker = base / '.cross_node_roots'
+    if marker.is_file():
+        clients, workers = [], []
+        for node_root in json.loads(marker.read_text(encoding='utf-8')):
+            node_clients, node_workers = discover_log_roots(node_root, prefix)
+            clients.extend(node_clients)
+            workers.extend(node_workers)
+        return sorted(set(clients)), sorted(set(workers))
+    if prefix is None:
+        client_root, worker_root = base / 'collected', base / 'collected_worker_logs'
+        if client_root.is_dir() or worker_root.is_dir():
+            return ([str(client_root)] if client_root.is_dir() else [],
+                    [str(worker_root)] if worker_root.is_dir() else [])
+    scopes = sorted((path for path in base.iterdir() if path.is_dir() and
+                     (prefix is None or path.name.startswith(prefix))), key=lambda path: str(path))
+    if prefix is not None and not scopes:
+        raise ValueError(f'no second-level directory under {base} starts with {prefix!r}')
+    clients, workers = set(), set()
+    for scope in scopes:
+        for directory, _, filenames in os.walk(scope, onerror=lambda _: None):
+            names = [name.lower() for name in filenames]
+            if any(name.startswith('ds_client_access') and name.endswith(('.log', '.log.gz')) for name in names):
+                clients.add(os.path.abspath(directory))
+            if any(name.startswith('access') and not name.startswith('ds_client_access') and
+                   name.endswith(('.log', '.log.gz')) for name in names):
+                workers.add(os.path.abspath(directory))
+    return sorted(clients), sorted(workers)
 
 
 def extract_ip(fp: str) -> Optional[str]:
@@ -245,11 +547,8 @@ def extract_float_b(line: bytes, marker: bytes) -> Optional[float]:
 # LINE PARSERS - Phase 1 extracts ALL fields (no data loss)
 # =============================================================================
 
-def parse_access_line(line: bytes, fp: str, is_client: bool) -> Optional[Tuple[bytes, bytes]]:
-    """
-    Parse access log line. Returns (trace_id, json_bytes) or None.
-    Format: timestamp | L | file:line | logger | tid:pid | trace_id | tenant | status | req_type | latency | size | {params} | [error]
-    """
+def _parse_access_record(line: bytes, fp: str, is_client: bool):
+    """Parse an access line without paying JSON serialization cost."""
     parts = line.split(b'|')
     if len(parts) < 8:
         return None
@@ -281,7 +580,6 @@ def parse_access_line(line: bytes, fp: str, is_client: bool) -> Optional[Tuple[b
 
         data = {
             '_cat': 'ca' if is_client else 'wa',
-            'timestamp': ts_bytes.decode('ascii', errors='replace').strip(),
             'timestamp_us': ts_to_us(ts_bytes),
             'status_code': status_code,
             'request_type': req_type,
@@ -292,9 +590,18 @@ def parse_access_line(line: bytes, fp: str, is_client: bool) -> Optional[Tuple[b
                    if len(parts) > 3 and parts[3].strip() else extract_ip(fp)),
             'error': error,
         }
-        return (tid, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return tid, data
     except (ValueError, IndexError):
         return None
+
+
+def parse_access_line(line: bytes, fp: str, is_client: bool) -> Optional[Tuple[bytes, bytes]]:
+    """Parse access log line and return ``(trace_id, json_bytes)``."""
+    parsed = _parse_access_record(line, fp, is_client)
+    if parsed is None:
+        return None
+    tid, data = parsed
+    return tid, json_dumps(compact_record(data)).encode()
 
 
 def parse_client_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]]:
@@ -338,14 +645,13 @@ def parse_client_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'timestamp': ts_str,
             'timestamp_us': ts_to_us(line[:ts_end]) if ts_end > 0 else 0,
             'urma_total_ms': extract_float(b'cost:'),
-            'urma_inflight': extract_int(b'urma_inflight_wr_cnt:'),
-            'data_size': extract_int(b'dataSize:'),
-            'urma_sched_us': (extract_int(b'wakeSchedLatencyUs:')
-                              or extract_int(b'urmaWriteWakeSchedLatencyUs:')
-                              or extract_int(b'firstUrmaWriteWakeSchedLatencyUs:')
-                              or extract_int(b'secondUrmaWriteWakeSchedLatencyUs:')),
+            'urma_inflight': extract_first_int(line, b'inflight_wr_cnt:', b'urma_inflight_wr_cnt:'),
+            'data_size': extract_first_int(line, b'data_size:', b'dataSize:'),
+            'urma_sched_us': extract_first_int(
+                line, b'wake_delay:', b'wakeSchedLatencyUs:', b'urmaWriteWakeSchedLatencyUs:',
+                b'firstUrmaWriteWakeSchedLatencyUs:', b'secondUrmaWriteWakeSchedLatencyUs:'),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # Extract ALL latency fields (complete data preservation)
     data = {
@@ -365,7 +671,7 @@ def parse_client_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
         'server_rsp_queue_us': extract_int(b'server_rsp_queue_us='),
         'network_residual_us': extract_int(b'network_residual_us='),
     }
-    return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+    return (trace_id, json_dumps(compact_record(data)).encode())
 
 
 def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]]:
@@ -413,7 +719,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'server_rsp_queue_us': extract_int(b'server_rsp_queue_us='),
             'network_residual_us': extract_int(b'network_residual_us='),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # Query metadata from master (GET)
     if MARKER_QUERY_MASTER in line:
@@ -429,7 +735,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'local_ip': local_ip,
             'master_ip': master_ip,
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # CreateMeta (SET) - indicates master RPC for SET operations
     if MARKER_CREATEMETA in line or MARKER_CREATE_META_TO_MASTER in line:
@@ -438,7 +744,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'timestamp': ts_str, 'timestamp_us': ts_us,
             'local_ip': local_ip,
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # [Get] Done
     if MARKER_GET_DONE in line:
@@ -448,7 +754,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'local_ip': local_ip,
             'total_cost_ms': extract_float(b'totalCost:'),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # [Set] Done
     if MARKER_SET_DONE in line:
@@ -458,7 +764,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'local_ip': local_ip,
             'total_cost_ms': extract_float(b'totalCost:'),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # [Get] Receive
     if MARKER_GET_RECV in line:
@@ -467,7 +773,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'timestamp': ts_str, 'timestamp_us': ts_us,
             'local_ip': local_ip,
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # Remote Pull
     if MARKER_REMOTE_PULL in line:
@@ -477,7 +783,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'local_ip': local_ip,
             'elapsed_ms': extract_float(b'elapsed:'),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # [Get] Remote done
     if MARKER_REMOTE_DONE in line:
@@ -486,45 +792,28 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'timestamp': ts_str, 'timestamp_us': ts_us,
             'local_ip': local_ip,
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # URMA elapsed
     if MARKER_URMA in line:
         # Extract src/target addresses for network path analysis
-        src_addr = None
-        tgt_addr = None
-        src_start = line.find(b'src addr:')
-        if src_start != -1:
-            src_start += len(b'src addr:')
-            src_end = line.find(b',', src_start)
-            if src_end == -1:
-                src_end = line.find(b' ', src_start)
-            if src_end != -1:
-                src_addr = line[src_start:src_end].strip().decode('utf-8', errors='replace')
-        tgt_start = line.find(b'tgt addr:')
-        if tgt_start != -1:
-            tgt_start += len(b'tgt addr:')
-            tgt_end = line.find(b',', tgt_start)
-            if tgt_end == -1:
-                tgt_end = line.find(b' ', tgt_start)
-            if tgt_end != -1:
-                tgt_addr = line[tgt_start:tgt_end].strip().decode('utf-8', errors='replace')
+        src_addr = extract_urma_address(line, b'src:', b'src addr:')
+        tgt_addr = extract_urma_address(line, b'dst:', b'tgt addr:')
 
         data = {
             '_cat': 'wi', '_sub': 'ur',
             'timestamp': ts_str, 'timestamp_us': ts_us,
             'local_ip': local_ip,
             'urma_total_ms': extract_float(b'cost:'),
-            'urma_inflight': extract_int(b'urma_inflight_wr_cnt:'),
-            'data_size': extract_int(b'dataSize:'),
+            'urma_inflight': extract_first_int(line, b'inflight_wr_cnt:', b'urma_inflight_wr_cnt:'),
+            'data_size': extract_first_int(line, b'data_size:', b'dataSize:'),
             'src_address': src_addr,
             'target_address': tgt_addr,
-            'urma_sched_us': (extract_int(b'wakeSchedLatencyUs:')
-                              or extract_int(b'urmaWriteWakeSchedLatencyUs:')
-                              or extract_int(b'firstUrmaWriteWakeSchedLatencyUs:')
-                              or extract_int(b'secondUrmaWriteWakeSchedLatencyUs:')),
+            'urma_sched_us': extract_first_int(
+                line, b'wake_delay:', b'wakeSchedLatencyUs:', b'urmaWriteWakeSchedLatencyUs:',
+                b'firstUrmaWriteWakeSchedLatencyUs:', b'secondUrmaWriteWakeSchedLatencyUs:'),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # Worker Create
     if MARKER_WORKER_CREATE in line:
@@ -534,7 +823,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'local_ip': local_ip,
             'elapsed_ms': extract_float(b'elapsed:'),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     # Publish done
     if MARKER_PUBLISH_DONE in line:
@@ -544,7 +833,7 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             'local_ip': local_ip,
             'elapsed_ms': extract_float(b'elapsed:'),
         }
-        return (trace_id, json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode())
+        return (trace_id, json_dumps(compact_record(data)).encode())
 
     return None
 
@@ -647,16 +936,61 @@ def _parse_urma_perf_lines(perf_lines: List[bytes]) -> Optional[bytes]:
 # PHASE 1: PARSE & SHARD
 # =============================================================================
 
+_PROCESS_TRACE_FILTER = None
+
+
+def _init_parse_worker(trace_filter):
+    """Install the Trace allow-list once per parser process."""
+    global _PROCESS_TRACE_FILTER
+    _PROCESS_TRACE_FILTER = trace_filter
+
+
+def _fast_trace_id(line: bytes, ptype: int) -> Optional[bytes]:
+    """Extract only the Trace id before doing expensive field/JSON parsing."""
+    if ptype == 1:
+        tid_start = line.find(b'trace_id=')
+        if tid_start != -1:
+            tid_start += len(b'trace_id=')
+            tid_end = line.find(b' ', tid_start)
+            return line[tid_start:tid_end if tid_end != -1 else len(line)]
+    parts = line.split(b'|', 6)
+    if len(parts) <= 5:
+        return None
+    tid = parts[5].strip()
+    return tid if tid and tid not in (b'-', b'null', b'None') else None
+
+
+def _trace_is_selected(line: bytes, ptype: int) -> bool:
+    if _PROCESS_TRACE_FILTER is None or ptype == 0:
+        return True
+    tid = _fast_trace_id(line, ptype)
+    return tid is not None and tid in _PROCESS_TRACE_FILTER
+
+
+def _line_may_parse(line: bytes, ptype: int) -> bool:
+    """Reject unrelated INFO lines before Trace extraction and full parsing."""
+    if ptype == 1:
+        return any(marker in line for marker in CLIENT_INFO_MARKERS)
+    if ptype == 3:
+        return any(marker in line for marker in WORKER_INFO_TRACE_MARKERS)
+    return True
+
+
 def parse_one_file(args):
     """Parse a single file, write records to shard files and optional info file.
 
     Returns (trace_count, info_count).
     """
-    filepath, shard_dir, shard_bits, ptype, info_dir = args
+    filepath, shard_dir, shard_bits, ptype, info_dir, worker_seen_dir = args
     handles = {}
     cnt = 0
     info_cnt = 0
     info_fh = None
+    worker_seen_fh = None
+    if worker_seen_dir and ptype == 2:
+        os.makedirs(worker_seen_dir, exist_ok=True)
+        worker_seen_fh = open(os.path.join(
+            worker_seen_dir, f'worker_seen_{os.getpid()}_{os.path.basename(filepath)}.tmp'), 'ab')
     if info_dir and ptype == 3:
         os.makedirs(info_dir, exist_ok=True)
         info_path = os.path.join(info_dir, f'gi_{os.getpid()}_{os.path.basename(filepath)}.tmp')
@@ -697,7 +1031,6 @@ def parse_one_file(args):
                 perf_header = None
                 perf_buffer = []
                 for line in f:
-                    line = line.strip()
                     if not line:
                         continue
                     if is_timestamp_line(line):
@@ -708,7 +1041,6 @@ def parse_one_file(args):
                             info_body = _parse_urma_perf_lines(perf_buffer)
                             if info_body and info_fh:
                                 info_fh.write(ts_perf.encode() + b'\t' + info_body + b'\n')
-                                info_fh.flush()
                                 info_cnt += 1
                             perf_header = None
                             perf_buffer = []
@@ -717,11 +1049,14 @@ def parse_one_file(args):
                             info = _parse_poll_gap(line)
                             if info and info_fh:
                                 info_fh.write(info + b'\n')
-                                info_fh.flush()
                                 info_cnt += 1
                             continue
                         if MARKER_URMA_PERF in line:
                             perf_header = line
+                            continue
+                        if not _trace_is_selected(line, ptype):
+                            continue
+                        if not _line_may_parse(line, ptype):
                             continue
                         # Normal worker info trace log
                         r = parser(line, filepath)
@@ -730,11 +1065,15 @@ def parse_one_file(args):
                             sid = shard_id(tid, shard_bits)
                             fh = get_fh(sid)
                             fh.write(tid + b'\t' + jbytes + b'\n')
+                            if worker_seen_fh:
+                                worker_seen_fh.write(tid + b'\n')
                             cnt += 1
                     else:
                         # Non-timestamp: URMA PERF continuation
                         if perf_header is not None:
-                            perf_buffer.append(line)
+                            stripped = line.strip()
+                            if stripped:
+                                perf_buffer.append(stripped)
                 # Flush final pending PERF
                 if perf_header is not None:
                     ts_end = perf_header.find(b' ')
@@ -742,13 +1081,15 @@ def parse_one_file(args):
                     info_body = _parse_urma_perf_lines(perf_buffer)
                     if info_body and info_fh:
                         info_fh.write(ts_perf.encode() + b'\t' + info_body + b'\n')
-                        info_fh.flush()
                         info_cnt += 1
             else:
                 # Normal streaming parse
                 for line in f:
-                    line = line.strip()
                     if not line:
+                        continue
+                    if not _trace_is_selected(line, ptype):
+                        continue
+                    if not _line_may_parse(line, ptype):
                         continue
                     r = parser(line, filepath)
                     if r is None:
@@ -757,6 +1098,8 @@ def parse_one_file(args):
                     sid = shard_id(tid, shard_bits)
                     fh = get_fh(sid)
                     fh.write(tid + b'\t' + jbytes + b'\n')
+                    if worker_seen_fh:
+                        worker_seen_fh.write(tid + b'\n')
                     cnt += 1
     except Exception as e:
         import traceback
@@ -767,26 +1110,116 @@ def parse_one_file(args):
             h.close()
         if info_fh:
             info_fh.close()
+        if worker_seen_fh:
+            worker_seen_fh.close()
     return cnt, info_cnt, ptype
 
 
-def phase1(client_dirs, worker_dirs, shard_dir, shard_bits, nworkers, info_dir=None):
+def _collect_client_trace_ids_one(args):
+    """Parse one client access file and spill selected ids/records to disk."""
+    (file_index, filepath, shard_dir, shard_bits, request_types, time_from, time_to,
+     latency_threshold, error_only, allow_dir) = args
+    handles = {}
+    allow_path = os.path.join(allow_dir, f'allow_{os.getpid()}_{file_index}.tmp')
+    selected_count = 0
+
+    def write_client_record(tid, payload):
+        if shard_dir is None:
+            return
+        sid = shard_id(tid, shard_bits)
+        if sid not in handles:
+            handles[sid] = open(os.path.join(shard_dir, f's_{sid}.tmp'), 'ab')
+        handles[sid].write(tid + b'\t' + payload + b'\n')
+    opener = gzip.open if filepath.endswith('.gz') else open
+    try:
+        with opener(filepath, 'rb') as source, open(allow_path, 'wb') as allow_out:
+            for line in source:
+                parsed = _parse_access_record(line, filepath, True)
+                if parsed is None:
+                    continue
+                tid, rec = parsed
+                if request_types and rec.get('request_type') not in request_types:
+                    continue
+                ts = parse_timestamp(rec.get('timestamp', ''))
+                if time_from and (not ts or ts < time_from):
+                    continue
+                if time_to and (not ts or ts > time_to):
+                    continue
+                if latency_threshold > 0 and (rec.get('latency_us') or 0) < latency_threshold:
+                    continue
+                has_err = rec.get('status_code', 0) != 0 or bool(rec.get('error', ''))
+                if error_only and not has_err:
+                    continue
+                allow_out.write(tid + b'\n')
+                payload = json_dumps(compact_record(rec)).encode()
+                write_client_record(tid, payload)
+                selected_count += 1
+    except OSError as exc:
+        print(f"[WARN] client trace pre-scan failed for {filepath}: {exc}", file=sys.stderr)
+    finally:
+        for handle in handles.values():
+            handle.close()
+    return allow_path, selected_count
+
+
+def _collect_client_trace_ids(client_access_files, shard_dir=None, shard_bits=8,
+                              request_types=None, time_from=None, time_to=None,
+                              latency_threshold=0, error_only=False, nworkers=1):
+    """Build a client-derived allow-list while parsing compressed files in parallel."""
+    trace_ids = set()
+    if shard_dir:
+        os.makedirs(shard_dir, exist_ok=True)
+    allow_dir = os.path.join(shard_dir or tempfile.gettempdir(), 'client_allow')
+    os.makedirs(allow_dir, exist_ok=True)
+    tasks = [(i, filepath, shard_dir, shard_bits, request_types, time_from, time_to,
+              latency_threshold, error_only, allow_dir)
+             for i, filepath in enumerate(client_access_files)]
+    if nworkers == 1:
+        results = map(_collect_client_trace_ids_one, tasks)
+        pool = None
+    else:
+        pool = mp.Pool(nworkers, maxtasksperchild=4)
+        results = pool.imap_unordered(_collect_client_trace_ids_one, tasks, chunksize=1)
+    try:
+        for allow_path, _ in results:
+            with open(allow_path, 'rb') as allow_in:
+                trace_ids.update(line.rstrip(b'\n') for line in allow_in if line.strip())
+        if pool:
+            pool.close()
+            pool.join()
+    except Exception:
+        if pool:
+            pool.terminate()
+            pool.join()
+        raise
+    return trace_ids
+
+
+def phase1(client_dirs, worker_dirs, shard_dir, shard_bits, nworkers, info_dir=None,
+           trace_filter=None, skip_client_access=False, only_ptypes=None,
+           worker_seen_dir=None):
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    started = time.perf_counter()
     print("[Phase 1] Parsing & sharding...")
     all_files = []
     ca = find_files(client_dirs, CLIENT_ACCESS_PATTERNS)
     ci = find_files(client_dirs, CLIENT_INFO_PATTERNS)
     wa = find_files(worker_dirs, WORKER_ACCESS_PATTERNS)
     wi = find_files(worker_dirs, WORKER_INFO_PATTERNS)
-    for f in ca:
-        all_files.append((f, shard_dir, shard_bits, 0, info_dir))
-    for f in ci:
-        all_files.append((f, shard_dir, shard_bits, 1, info_dir))
-    for f in wa:
-        all_files.append((f, shard_dir, shard_bits, 2, info_dir))
-    for f in wi:
-        all_files.append((f, shard_dir, shard_bits, 3, info_dir))
+    wanted = set(only_ptypes) if only_ptypes is not None else {0, 1, 2, 3}
+    if not skip_client_access and 0 in wanted:
+        for f in ca:
+            all_files.append((f, shard_dir, shard_bits, 0, info_dir, worker_seen_dir))
+    for f in ci if 1 in wanted else []:
+        all_files.append((f, shard_dir, shard_bits, 1, info_dir, worker_seen_dir))
+    for f in wa if 2 in wanted else []:
+        all_files.append((f, shard_dir, shard_bits, 2, info_dir, worker_seen_dir))
+    for f in wi if 3 in wanted else []:
+        all_files.append((f, shard_dir, shard_bits, 3, info_dir, worker_seen_dir))
 
     print(f"  Files: ca={len(ca)} ci={len(ci)} wa={len(wa)} wi={len(wi)} total={len(all_files)}")
+    if trace_filter is not None:
+        print(f"  Worker trace allow-list: {len(trace_filter)} trace ids")
     if wi:
         for f in wi[:5]:
             print(f"    wi: {os.path.basename(f)}")
@@ -802,10 +1235,11 @@ def phase1(client_dirs, worker_dirs, shard_dir, shard_bits, nworkers, info_dir=N
     # Use explicit close/join instead of 'with' to avoid terminate() hang.
     # maxtasksperchild: restart worker after N tasks to prevent memory bloat.
     if nworkers == 1:
+        _init_parse_worker(trace_filter)
         iterator = map(parse_one_file, all_files)
         pool = None
     else:
-        pool = mp.Pool(nworkers, maxtasksperchild=4)
+        pool = mp.Pool(nworkers, initializer=_init_parse_worker, initargs=(trace_filter,), maxtasksperchild=4)
         chunksize = max(1, len(all_files) // (nworkers * 4))
         iterator = pool.imap_unordered(parse_one_file, all_files, chunksize=chunksize)
     try:
@@ -823,13 +1257,46 @@ def phase1(client_dirs, worker_dirs, shard_dir, shard_bits, nworkers, info_dir=N
             pool.terminate()
             pool.join()
         raise
-    print(f"  Done: {total_recs} records -> {1 << shard_bits} shards, {total_info} info lines")
+    shard_bytes = sum(os.path.getsize(os.path.join(shard_dir, name))
+                      for name in os.listdir(shard_dir)
+                      if name.startswith('s_') and name.endswith('.tmp'))
+    print(f"  Done: {total_recs} records -> {1 << shard_bits} shards, {total_info} info lines | "
+          f"shard-bytes={shard_bytes:,} {elapsed_log(started_at, started)}")
     print(f"  Parsed records: client-access={category_records[0]} client-info={category_records[1]} "
           f"worker-access={category_records[2]} worker-info={category_records[3]}")
-    if category_records[0] == 0:
+    if category_records[0] == 0 and trace_filter is None:
         print("  [WARN] client-access=0: no usable client access trace was parsed. "
               "Expected pipe field 6 to contain a non-empty trace id and field 9 to be DS_KV_CLIENT_GET/SET.")
     return total_recs, total_info
+
+
+def _collect_worker_access_trace_ids(shard_dir=None, seen_dir=None):
+    """Return Trace IDs that have a correlated Worker access record."""
+    matched = set()
+    if seen_dir and os.path.isdir(seen_dir):
+        for name in os.listdir(seen_dir):
+            if not name.startswith('worker_seen_') or not name.endswith('.tmp'):
+                continue
+            with open(os.path.join(seen_dir, name), 'rb') as source:
+                matched.update(line.rstrip(b'\n') for line in source if line.strip())
+        return matched
+    if not shard_dir:
+        return matched
+    for name in os.listdir(shard_dir):
+        if not name.startswith('s_') or not name.endswith('.tmp'):
+            continue
+        with open(os.path.join(shard_dir, name), 'rb') as source:
+            for line in source:
+                tab = line.find(b'\t')
+                if tab == -1:
+                    continue
+                try:
+                    rec = expand_record(json_loads(line[tab + 1:]))
+                except (TypeError, ValueError):
+                    continue
+                if rec.get('_cat') == 'wa':
+                    matched.add(line[:tab])
+    return matched
 
 
 # =============================================================================
@@ -989,8 +1456,8 @@ def merge_shard(args):
                 continue
             tid = line[:tab]
             try:
-                rec = json.loads(line[tab+1:])
-            except json.JSONDecodeError:
+                rec = expand_record(json_loads(line[tab+1:]))
+            except (TypeError, ValueError):
                 continue
 
             cat = rec.pop('_cat', None)
@@ -1148,23 +1615,6 @@ def merge_shard(args):
                 if not wa.get('error'):
                     wa.pop('error', None)
 
-            # Build local_worker: None for Client Direct mode
-            local_worker = None
-            if not is_client_direct:
-                local_worker = {
-                    'master_ip': master_ip,
-                    'master_rpc': mr,
-                    'remote_worker_rpc': rr,
-                    'get_done': gd,
-                    'get_receive': gr,
-                    'remote_pull': rp,
-                    'remote_done': rd,
-                    'set_done': sd,
-                    'worker_create': wc,
-                    'publish_done': pd,
-                    'local_ip': local_ip,
-                }
-
             result = {
                 'trace_id': tid.decode('ascii'),
                 'request_type': ca['request_type'],
@@ -1172,18 +1622,16 @@ def merge_shard(args):
                 'status_code': ca['status_code'],
                 'latency_us': ca['latency_us'],
                 'data_size': ca.get('data_size', 0),
-                'params': ca.get('params', {}),
                 'client_ip': ca.get('ip'),
                 'error': ca.get('error', ''),
-                'sdk_worker_rpc': cr_list if cr_list else None,
-                'worker_access': wa_list if wa_list else None,
-                'local_worker': local_worker,
-                'urma': urma,
-                'client_urma': client_urma,
+                'worker_access_latency_max': max(
+                    (wa.get('latency_us', 0) or 0 for wa in wa_list), default=0),
+                'urma_inflight_max': max(
+                    (u.get('urma_inflight', 0) or 0 for u in urma), default=0),
                 'path_role': path_role,
                 'latency_segmentation': seg,
             }
-            out.write(json.dumps(result, ensure_ascii=False, separators=(',', ':')) + '\n')
+            out.write(json_dumps(compact_record(result)) + '\n')
             cnt += 1
     # Force GC before returning to reduce memory bloat in reused worker processes
     gc.collect()
@@ -1254,6 +1702,8 @@ def safe_get(d, path, default=0):
 
 
 def phase2(shard_dir, output_file, nworkers, filters):
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    started = time.perf_counter()
     print("\n[Phase 2] Merging shards...")
     sfiles = sorted([
         os.path.join(shard_dir, f) for f in os.listdir(shard_dir)
@@ -1293,13 +1743,18 @@ def phase2(shard_dir, output_file, nworkers, filters):
                 pool.join()
             raise
 
+        merge_elapsed = time.perf_counter() - started
         print(f"  Concatenating...")
+        concat_started = time.perf_counter()
         with open(output_file, 'wb') as outf:
             for tf in tmps:
                 if os.path.exists(tf) and os.path.getsize(tf) > 0:
                     with open(tf, 'rb') as inf:
                         shutil.copyfileobj(inf, outf)
-        print(f"  Done: {total} traces")
+        concat_elapsed = time.perf_counter() - concat_started
+        print(f"  Done: {total} traces | output-bytes={os.path.getsize(output_file):,} "
+              f"merge={merge_elapsed:.2f}s concat={concat_elapsed:.2f}s "
+              f"{elapsed_log(started_at, started)}")
     finally:
         for tf in tmps:
             if os.path.exists(tf):
@@ -1320,7 +1775,7 @@ import re
 import sys
 from array import array
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 # \u5C1D\u8BD5\u4F7F\u7528 orjson \u52A0\u901F\u89E3\u6790\uFF08\u53EF\u9009\uFF09
 try:
@@ -1340,7 +1795,7 @@ except ImportError:
         return json.loads(s)
 
     def json_dumps(obj):
-        return json.dumps(obj, ensure_ascii=False)
+        return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
 
     HAS_ORJSON = False
 
@@ -1362,9 +1817,18 @@ def parse_timestamp(ts_str):
         return None
 
 
+_FIELD_PATH_CACHE = {}
+
+
 def get_nested_value(data, path, default=0, keep_none=False):
     """\u5B89\u5168\u83B7\u53D6\u5D4C\u5957\u5B57\u5178\u503C"""
-    keys = path.split('.')
+    if isinstance(path, str):
+        keys = _FIELD_PATH_CACHE.get(path)
+        if keys is None:
+            keys = tuple(path.split('.'))
+            _FIELD_PATH_CACHE[path] = keys
+    else:
+        keys = path
     val = data
     for k in keys:
         if isinstance(val, dict) and k in val:
@@ -1390,6 +1854,26 @@ def compute_percentile(sorted_arr, p):
         return sorted_arr[lower]
     frac = idx - lower
     return sorted_arr[lower] * (1 - frac) + sorted_arr[upper] * frac
+
+
+def compute_percentile_with_leading_zeros(sorted_positive, zero_count, p):
+    """Compute the exact linear percentile without materializing absent-stage zeros."""
+    total = zero_count + len(sorted_positive)
+    if total == 0:
+        return 0
+    if total == 1:
+        return 0 if zero_count else sorted_positive[0]
+    idx = (total - 1) * p / 100.0
+    lower = int(math.floor(idx))
+    upper = int(math.ceil(idx))
+
+    def value_at(index):
+        return 0 if index < zero_count else sorted_positive[index - zero_count]
+
+    if lower == upper:
+        return value_at(lower)
+    frac = idx - lower
+    return value_at(lower) * (1 - frac) + value_at(upper) * frac
 
 
 def format_us(val, field_name=None):
@@ -1511,8 +1995,9 @@ class KVCacheAnalyzer:
         self.remote_mode_count = 0
 
         # \u6D3B\u8DC3\u7A97\u53E3\u539F\u59CB\u6570\u636E
-        self.active_windows = defaultdict(lambda: defaultdict(list))
-        self.active_windows_total = defaultdict(list)
+        self.active_windows = defaultdict(lambda: defaultdict(lambda: array('d')))
+        self.active_windows_total = defaultdict(lambda: array('d'))
+        self.active_window_counts = defaultdict(int)
 
         # \u7A97\u53E3\u7EDF\u8BA1\u7ED3\u679C
         self.window_stats = {}
@@ -1525,7 +2010,6 @@ class KVCacheAnalyzer:
         self.all_latencies = array('d')
 
         # \u5168\u5C40\u5404\u5B57\u6BB5\u503C\u5217\u8868
-        self.global_field_values = {fp: array('d') for fp, _ in self.SEGMENT_FIELDS}
 
         # QPS \u7EDF\u8BA1\uFF1A10ms\u7A97\u53E3 -> {request_type -> count}
         self.qps_windows = defaultdict(lambda: defaultdict(int)) if collect_qps else None
@@ -1544,26 +2028,42 @@ class KVCacheAnalyzer:
         """\u6309\u805A\u5408\u7A97\u53E3\u5BF9\u9F50\u65F6\u95F4\u6233\uFF1A\u4EE5\u5F53\u65E5 0 \u70B9\u4E3A\u57FA\u51C6\uFF0C\u6309\u7A97\u53E3\u6BEB\u79D2\u6570\u5411\u4E0B\u53D6\u6574"""
         day_ms = ((dt.hour * 60 + dt.minute) * 60 + dt.second) * 1000 + dt.microsecond // 1000
         aligned_ms = day_ms // self.window_ms * self.window_ms
-        aligned = datetime(
-            dt.year, dt.month, dt.day,
-            aligned_ms // 3600000, aligned_ms // 60000 % 60,
-            aligned_ms // 1000 % 60, aligned_ms % 1000 * 1000
-        )
-        if self.window_ms < 1000:
-            return aligned.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        return aligned.strftime('%Y-%m-%d %H:%M:%S')
+        return dt.date().toordinal() * 86400000 + aligned_ms
 
     def _window_label(self):
         if self.window_ms % 1000 == 0:
             return f'{self.window_ms // 1000}\u79D2'
         return f'{self.window_ms}\u6BEB\u79D2'
 
+    def _format_window_key(self, key):
+        day, day_ms = divmod(key, 86400000)
+        aligned = datetime.fromordinal(day).replace(
+            hour=day_ms // 3600000,
+            minute=day_ms // 60000 % 60,
+            second=day_ms // 1000 % 60,
+            microsecond=day_ms % 1000 * 1000)
+        if self.window_ms < 1000:
+            return aligned.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        return aligned.strftime('%Y-%m-%d %H:%M:%S')
+
+    @staticmethod
+    def _format_qps_key(key):
+        day, day_ms = divmod(key, 86400000)
+        value = datetime.fromordinal(day).replace(
+            hour=day_ms // 3600000,
+            minute=day_ms // 60000 % 60,
+            second=day_ms // 1000 % 60,
+            microsecond=day_ms % 1000 * 1000)
+        return value.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
     def _record_request_segments(self, window_key, segments):
         """Use every request as the denominator for request-stage trends."""
+        self.active_window_counts[window_key] += 1
+        window_values = self.active_windows[window_key]
         for field_path in self.REQUEST_TREND_FIELD_PATHS:
             value = segments.get(field_path)
-            self.active_windows[window_key][field_path].append(
-                value if value is not None and value > 0 else 0)
+            if value is not None and value > 0:
+                window_values[field_path].append(value)
 
     @staticmethod
     def _detect_mode(segs):
@@ -1737,17 +2237,21 @@ class KVCacheAnalyzer:
 
         # Worker Access \u65F6\u5EF6\uFF1A\u53D6 worker_access \u6570\u7EC4\u4E2D latency_us \u7684\u6700\u5927\u503C
         worker_access_list = item.get('worker_access', [])
-        if worker_access_list and isinstance(worker_access_list, list):
+        max_wa_lat = item.get('worker_access_latency_max')
+        if max_wa_lat is None and worker_access_list and isinstance(worker_access_list, list):
             max_wa_lat = max(w.get('latency_us', 0) or 0 for w in worker_access_list)
-            segments['worker_access_latency_us'] = max_wa_lat if max_wa_lat > 0 else None
+        if max_wa_lat:
+            segments['worker_access_latency_us'] = max_wa_lat
         else:
             segments['worker_access_latency_us'] = None
 
         # URMA \u5E76\u53D1\u6570\uFF1A\u53D6 urma \u6570\u7EC4\u4E2D urma_inflight \u7684\u6700\u5927\u503C
         urma_list = item.get('urma', [])
-        if urma_list and isinstance(urma_list, list):
+        max_inflight = item.get('urma_inflight_max')
+        if max_inflight is None and urma_list and isinstance(urma_list, list):
             max_inflight = max(u.get('urma_inflight', 0) or 0 for u in urma_list)
-            segments['urma_inflight_max'] = max_inflight if max_inflight > 0 else None
+        if max_inflight:
+            segments['urma_inflight_max'] = max_inflight
         else:
             segments['urma_inflight_max'] = None
 
@@ -1856,7 +2360,7 @@ class KVCacheAnalyzer:
         # \u8BA1\u7B97\u6BCF\u4E2A\u7A97\u53E3\u7684 poll \u64CD\u4F5C\u57FA\u6570\uFF08\u7528\u4E8E sleep P99 \u57FA\u6570\uFF09
         # \u4F18\u5148\u4F7F\u7528 URMA count\uFF08\u6BCF URMA \u5BF9\u5E94 2 \u6B21 poll\uFF09\uFF0C\u7F3A\u5931\u65F6\u7528\u8BF7\u6C42\u603B\u6570\u4F5C\u4E3A\u8FD1\u4F3C
         for wk in self.active_windows:
-            ub_count = len(self.active_windows[wk].get('urma_processing_us', []))
+            ub_count = self.active_window_counts.get(wk, 0)
             if ub_count == 0:
                 ub_count = len(self.active_windows_total.get(wk, []))
             self.info_ub_count[wk] = ub_count
@@ -1881,17 +2385,19 @@ class KVCacheAnalyzer:
     def _finalize_window(self, wk, window_values, window_total_latencies):
         """\u8BA1\u7B97\u5E76\u4FDD\u5B58\u5355\u4E2A\u7A97\u53E3\u7684\u7EDF\u8BA1\u7ED3\u679C"""
         stats = {}
+        request_count = self.active_window_counts.get(wk, len(window_total_latencies))
         for fp, _ in self.SEGMENT_FIELDS:
             vals = window_values.get(fp, [])
-            if vals:
+            if vals or (fp in self.REQUEST_TREND_FIELD_PATHS and request_count):
                 vals_sorted = sorted(vals)
+                zero_count = request_count - len(vals_sorted) if fp in self.REQUEST_TREND_FIELD_PATHS else 0
                 stats[fp] = {
-                    'avg': round(sum(vals_sorted) / len(vals_sorted), 2),
-                    'p99': round(compute_percentile(vals_sorted, 99), 2),
-                    'p9999': round(compute_percentile(vals_sorted, 99.99), 2),
-                    'pmax': round(max(vals_sorted), 2),
-                    'count': len(vals_sorted),
-                    'coverage': sum(1 for value in vals_sorted if value > 0)
+                    'avg': round(sum(vals_sorted) / (zero_count + len(vals_sorted)), 2),
+                    'p99': round(compute_percentile_with_leading_zeros(vals_sorted, zero_count, 99), 2),
+                    'p9999': round(compute_percentile_with_leading_zeros(vals_sorted, zero_count, 99.99), 2),
+                    'pmax': round(max(vals_sorted) if vals_sorted else 0, 2),
+                    'count': zero_count + len(vals_sorted),
+                    'coverage': len(vals_sorted)
                 }
         if window_total_latencies:
             vals_sorted = sorted(window_total_latencies)
@@ -1910,12 +2416,13 @@ class KVCacheAnalyzer:
         sleep_base = ub_count * 2
         if sleep_base > 0:
             # \u6784\u5EFA\u5B8C\u6574\u6570\u7EC4\uFF1A\u5B9E\u9645\u503C + \u88650
-            full_sleep = sorted(sleep_vals + [0] * (sleep_base - len(sleep_vals)))
+            sleep_sorted = sorted(sleep_vals)
+            zero_count = max(0, sleep_base - len(sleep_sorted))
             stats['sleep_time_us'] = {
-                'avg': round(sum(full_sleep) / sleep_base, 2),
-                'p99': round(compute_percentile(full_sleep, 99), 2),
-                'p9999': round(compute_percentile(full_sleep, 99.99), 2),
-                'pmax': round(max(full_sleep) if full_sleep else 0, 2),
+                'avg': round(sum(sleep_sorted) / sleep_base, 2),
+                'p99': round(compute_percentile_with_leading_zeros(sleep_sorted, zero_count, 99), 2),
+                'p9999': round(compute_percentile_with_leading_zeros(sleep_sorted, zero_count, 99.99), 2),
+                'pmax': round(max(sleep_sorted) if sleep_sorted else 0, 2),
                 'count': len(sleep_vals),  # \u663E\u793A\u771F\u5B9E\u6837\u672C\u6570
                 'base_count': sleep_base   # \u57FA\u6570\u7528\u4E8EP99\u8BA1\u7B97
             }
@@ -1987,6 +2494,64 @@ class KVCacheAnalyzer:
         elif rec['latency_us'] > self.top_heap[0][0]:
             heapq.heapreplace(self.top_heap, entry)
 
+    def consume_item(self, item):
+        """Update exact request aggregates from one decoded trace."""
+        rec = self._extract_record(item)
+        if rec is None:
+            return
+        wk = rec['window_key']
+        self._record_request_segments(wk, rec['segments'])
+        self.active_windows_total[wk].append(rec['latency_us'])
+        self.all_latencies.append(rec['latency_us'])
+        if self.collect_qps:
+            ts = rec['timestamp']
+            qps_key = ts.date().toordinal() * 86400000 + (
+                ((ts.hour * 60 + ts.minute) * 60 + ts.second) * 1000 +
+                (ts.microsecond // 10000) * 10)
+            self.qps_windows[qps_key][rec['request_type']] += 1
+        self._update_top_heap(rec)
+
+    def export_partial_state(self):
+        return {
+            'total_count': self.total_count,
+            'filtered_count': self.filtered_count,
+            'error_count': self.error_count,
+            'local_mode_count': self.local_mode_count,
+            'remote_mode_count': self.remote_mode_count,
+            'active_window_counts': dict(self.active_window_counts),
+            'active_windows': {
+                wk: {fp: values for fp, values in fields.items()}
+                for wk, fields in self.active_windows.items()
+            },
+            'active_windows_total': dict(self.active_windows_total),
+            'all_latencies': self.all_latencies,
+            'qps_windows': ({wk: dict(counts) for wk, counts in self.qps_windows.items()}
+                            if self.collect_qps else None),
+            'top_records': [entry[2] for entry in sorted(self.top_heap, key=lambda entry: entry[1])],
+        }
+
+    def merge_partial_state(self, state):
+        self.total_count += state['total_count']
+        self.filtered_count += state['filtered_count']
+        self.error_count += state['error_count']
+        self.local_mode_count += state['local_mode_count']
+        self.remote_mode_count += state['remote_mode_count']
+        for wk, count in state['active_window_counts'].items():
+            self.active_window_counts[wk] += count
+        for wk, fields in state['active_windows'].items():
+            target = self.active_windows[wk]
+            for fp, values in fields.items():
+                target[fp].extend(values)
+        for wk, values in state['active_windows_total'].items():
+            self.active_windows_total[wk].extend(values)
+        self.all_latencies.extend(state['all_latencies'])
+        if self.collect_qps:
+            for wk, counts in state['qps_windows'].items():
+                for request_type, count in counts.items():
+                    self.qps_windows[wk][request_type] += count
+        for rec in state['top_records']:
+            self._update_top_heap(rec)
+
     def load_data(self):
         """\u6D41\u5F0F\u52A0\u8F7D\u6570\u636E"""
         open_fn = gzip.open if self.filepath.endswith('.gz') else open
@@ -2012,57 +2577,31 @@ class KVCacheAnalyzer:
                     if not line:
                         continue
                     try:
-                        item = json_loads(line)
+                        item = expand_record(json_loads(line))
                     except Exception:
                         continue
                 else:
                     item = line
 
-                rec = self._extract_record(item)
-                if rec is None:
-                    continue
-
-                wk = rec['window_key']
-
-                # Request-stage trends use the full request count as denominator.
-                self._record_request_segments(wk, rec['segments'])
-                # Global summaries retain only stage-present samples.
-                for fp, _ in self.SEGMENT_FIELDS:
-                    val = rec['segments'][fp]
-                    if val is not None and val > 0:
-                        self.global_field_values[fp].append(val)
-
-                self.active_windows_total[wk].append(rec['latency_us'])
-                self.all_latencies.append(rec['latency_us'])
-
-                # QPS \u7EDF\u8BA1\uFF1A10ms\u7A97\u53E3\uFF08\u5173\u95ED\u65F6\u8FDE\u805A\u5408\u5B57\u5178\u90FD\u4E0D\u521B\u5EFA\uFF09
-                if self.collect_qps:
-                    qps_ts = datetime(
-                        rec['timestamp'].year, rec['timestamp'].month, rec['timestamp'].day,
-                        rec['timestamp'].hour, rec['timestamp'].minute, rec['timestamp'].second,
-                        (rec['timestamp'].microsecond // 10000) * 10000  # \u5BF9\u9F50\u523010ms
-                    )
-                    qps_key = qps_ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # \u4FDD\u7559\u5230\u6BEB\u79D2
-                    self.qps_windows[qps_key][rec['request_type']] += 1
-
-                # Top N \u5806
-                self._update_top_heap(rec)
-
+                self.consume_item(item)
                 if line_no % progress_interval == 0:
                     mem_mb = self._get_memory_mb()
                     active_windows = len(self.active_windows)
-                    print(f"  \u5DF2\u5904\u7406 {line_no:,} \u884C | \u8FC7\u6EE4\u540E {self.filtered_count:,} \u6761 | "
-                          f"\u672C\u5730\u6A21\u5F0F {self.local_mode_count} | \u8FDC\u7A0B\u6A21\u5F0F {self.remote_mode_count} | "
-                          f"\u6D3B\u8DC3\u7A97\u53E3 {active_windows} | \u5185\u5B58 {mem_mb:.1f} MB")
+                    print(f"  已处理 {line_no:,} 行 | 过滤后 {self.filtered_count:,} 条 | "
+                          f"本地模式 {self.local_mode_count} | 远程模式 {self.remote_mode_count} | "
+                          f"活跃窗口 {active_windows} | 内存 {mem_mb:.1f} MB")
 
-            # \u8BFB\u53D6 .info \u6587\u4EF6
-            self._load_info_file()
+        self.finalize_loaded_data()
 
-            print(f"  \u5904\u7406\u5B8C\u6210\uFF0C\u5171 {len(self.active_windows)} \u4E2A\u7A97\u53E3\uFF0C\u5F00\u59CB\u805A\u5408\u7EDF\u8BA1...")
-            for wk in self.active_windows:
-                self._finalize_window(wk, self.active_windows[wk], self.active_windows_total[wk])
-
-            self._forward_fill_info_stats()
+    def finalize_loaded_data(self):
+        """Finalize exact aggregates after either private or shared loading."""
+        self._load_info_file()
+        print(f"  \u5904\u7406\u5B8C\u6210\uFF0C\u5171 {len(self.active_windows)} \u4E2A\u7A97\u53E3\uFF0C\u5F00\u59CB\u805A\u5408\u7EDF\u8BA1...")
+        for wk in self.active_windows:
+            self._finalize_window(wk, self.active_windows[wk], self.active_windows_total[wk])
+        self._forward_fill_info_stats()
+        self.window_stats = {self._format_window_key(wk): stats
+                             for wk, stats in self.window_stats.items()}
 
     @staticmethod
     def _get_memory_mb():
@@ -2077,8 +2616,11 @@ class KVCacheAnalyzer:
     def get_top_slow(self):
         return [rec for _, _, rec in sorted(self.top_heap, key=lambda x: x[0], reverse=True)]
 
-    def generate_html(self, output_path):
-        self.load_data()
+    def generate_html(self, output_path, load_data=True):
+        started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+        started = time.perf_counter()
+        if load_data:
+            self.load_data()
 
         if not self.window_stats:
             print("\u8B66\u544A\uFF1A\u8FC7\u6EE4\u540E\u6CA1\u6709\u6570\u636E\u8BB0\u5F55")
@@ -2125,12 +2667,12 @@ class KVCacheAnalyzer:
         # QPS \u6570\u636E\u805A\u5408\uFF1A\u5173\u95ED\u65F6\u4E0D\u904D\u5386\u3001\u4E0D\u5E8F\u5217\u5316\u3001\u4E0D\u5199\u5165 HTML
         qps_time_keys, qps_request_types, qps_data = [], [], {}
         if self.collect_qps:
-            qps_time_keys = sorted(self.qps_windows.keys())
+            qps_time_keys = [self._format_qps_key(key) for key in sorted(self.qps_windows.keys())]
             qps_request_types = sorted(set(rt for w in self.qps_windows.values() for rt in w.keys()))
-            for tk in qps_time_keys:
+            for key, tk in zip(sorted(self.qps_windows.keys()), qps_time_keys):
                 qps_data[tk] = {}
                 for rt in qps_request_types:
-                    count = self.qps_windows[tk].get(rt, 0)
+                    count = self.qps_windows[key].get(rt, 0)
                     qps_data[tk][rt] = count * 100  # 10ms\u7A97\u53E3\u5185\u8BF7\u6C42\u6570 \u00D7 100 = QPS\uFF08\u6BCF\u79D2\u8BF7\u6C42\u6570\uFF09
 
         # \u5168\u5C40\u7EDF\u8BA1
@@ -2161,6 +2703,7 @@ class KVCacheAnalyzer:
 
         # .info \u6587\u4EF6\u5168\u5C40\u7EDF\u8BA1\uFF1Asleep \u65F6\u95F4
         all_sleep = []
+        all_sleep_base = 0
         for wk in self.info_sleep_values:
             ub_count = self.info_ub_count.get(wk, 0)
             if ub_count == 0:
@@ -2168,17 +2711,17 @@ class KVCacheAnalyzer:
             sleep_base = ub_count * 2
             if sleep_base > 0:
                 sleep_vals = self.info_sleep_values[wk]
-                full_sleep = sorted(sleep_vals + [0] * (sleep_base - len(sleep_vals)))
-                all_sleep.extend(full_sleep)
+                all_sleep.extend(sleep_vals)
+                all_sleep_base += sleep_base
         if all_sleep:
             all_sleep_sorted = sorted(all_sleep)
             # \u8BA1\u7B97\u771F\u5B9E\u6837\u672C\u6570\uFF08\u975E0\u503C\uFF09
             actual_count = sum(1 for v in all_sleep_sorted if v > 0)
             global_stats.append({
                 'field': 'sleep_time_us', 'name': 'sleep\u65F6\u95F4',
-                'avg': round(sum(all_sleep_sorted) / len(all_sleep_sorted), 2),
-                'p99': round(compute_percentile(all_sleep_sorted, 99), 2),
-                'p9999': round(compute_percentile(all_sleep_sorted, 99.99), 2),
+                'avg': round(sum(all_sleep_sorted) / all_sleep_base, 2),
+                'p99': round(compute_percentile_with_leading_zeros(all_sleep_sorted, all_sleep_base - len(all_sleep_sorted), 99), 2),
+                'p9999': round(compute_percentile_with_leading_zeros(all_sleep_sorted, all_sleep_base - len(all_sleep_sorted), 99.99), 2),
                 'pmax': round(max(all_sleep_sorted), 2),
                 'ratio': 0.0,
                 'count': actual_count  # \u663E\u793A\u771F\u5B9E\u6837\u672C\u6570\uFF08>250\u00B5s\u7684\u8BB0\u5F55\u6570\uFF09
@@ -2200,7 +2743,8 @@ class KVCacheAnalyzer:
         for fp, name in self.SEGMENT_FIELDS:
             if fp in {field for field, _ in self.URMA_INFO_FIELDS}:
                 continue
-            vals = sorted(self.global_field_values[fp])
+            vals = sorted(value for fields in self.active_windows.values()
+                          for value in fields.get(fp, ()))
             if not vals:
                 continue
             avg = round(sum(vals) / len(vals), 2)
@@ -2312,6 +2856,9 @@ class KVCacheAnalyzer:
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html)
+
+        print(f'[Report] html bytes={os.path.getsize(output_path):,} '
+              f'{elapsed_log(started_at, started)}')
 
         mem_mb = self._get_memory_mb()
         print(f"\u2705 \u62A5\u544A\u5DF2\u751F\u6210\uFF1A{os.path.abspath(output_path)}")
@@ -2843,7 +3390,132 @@ def parse_bool(value):
     raise argparse.ArgumentTypeError('expected true or false')
 
 
+def _jsonl_byte_ranges(filepath, workers):
+    file_size = os.path.getsize(filepath)
+    if file_size == 0:
+        return []
+    chunk_size = max(1, math.ceil(file_size / workers))
+    return [(start, min(file_size, start + chunk_size))
+            for start in range(0, file_size, chunk_size)]
+
+
+def _consume_shared_item(item, analyzers):
+    request_type = item.get('request_type', '')
+    matched = analyzers.get(request_type)
+    if matched is not None:
+        matched.consume_item(item)
+        for analyzer in analyzers.values():
+            if analyzer is not matched:
+                analyzer.total_count += 1
+        return
+    for analyzer in analyzers.values():
+        analyzer.consume_item(item)
+
+
+def _analyze_jsonl_range(args):
+    filepath, start, end, analyzer_specs, state_path = args
+    analyzers = {
+        key: KVCacheAnalyzer(filepath, filters=filters, top_n=top_n,
+                             window_ms=window_ms, collect_qps=collect_qps)
+        for key, filters, top_n, window_ms, collect_qps in analyzer_specs
+    }
+    rows = 0
+    with open(filepath, 'rb') as source:
+        if start:
+            source.seek(start - 1)
+            if source.read(1) != b'\n':
+                source.readline()
+        else:
+            source.seek(0)
+        while source.tell() < end:
+            line = source.readline()
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = expand_record(json_loads(line))
+            except Exception:
+                continue
+            rows += 1
+            _consume_shared_item(item, analyzers)
+    with open(state_path, 'wb') as output:
+        pickle.dump({key: analyzer.export_partial_state()
+                     for key, analyzer in analyzers.items()}, output,
+                    protocol=pickle.HIGHEST_PROTOCOL)
+    return rows
+
+
+def load_analyzers_parallel(filepath, analyzers, jobs, temp_dir):
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    started = time.perf_counter()
+    ranges = _jsonl_byte_ranges(filepath, jobs)
+    if len(ranges) < 2:
+        load_analyzers_once(filepath, analyzers)
+        return
+    analyzer_specs = [
+        (key, analyzer.filters, analyzer.top_n, analyzer.window_ms, analyzer.collect_qps)
+        for key, analyzer in analyzers.items()
+    ]
+    state_paths = [os.path.join(temp_dir, f'analyzer_{index}.pickle')
+                   for index in range(len(ranges))]
+    tasks = [(filepath, start, end, analyzer_specs, state_path)
+             for (start, end), state_path in zip(ranges, state_paths)]
+    print(f'[Report] parallel trace analysis: {len(tasks)} byte ranges, {jobs} workers, '
+          f'input-bytes={os.path.getsize(filepath):,}')
+    with mp.Pool(min(jobs, len(tasks)), maxtasksperchild=1) as pool:
+        row_counts = pool.map(_analyze_jsonl_range, tasks)
+    merged_rows = 0
+    for row_count, state_path in zip(row_counts, state_paths):
+        with open(state_path, 'rb') as source:
+            states = pickle.load(source)
+        for key, state in states.items():
+            analyzers[key].merge_partial_state(state)
+        merged_rows += row_count
+        print(f'  parallel analyzer: {merged_rows:,} rows merged')
+        os.remove(state_path)
+    for analyzer in analyzers.values():
+        analyzer.finalize_loaded_data()
+    print(f'[Report] parallel analysis {elapsed_log(started_at, started)}')
+
+
+def load_analyzers_once(filepath, analyzers):
+    """Decode traces once and feed analyzers without sharing their statistics."""
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    started = time.perf_counter()
+    progress_interval = 100000
+    with open(filepath, 'rt', encoding='utf-8', errors='ignore') as source:
+        first_line = source.readline().strip()
+        source.seek(0)
+        if first_line.startswith('['):
+            rows = json.load(source)
+        else:
+            rows = source
+        for line_no, row in enumerate(rows, 1):
+            if isinstance(row, str):
+                row = row.strip()
+                if not row:
+                    continue
+                try:
+                    item = expand_record(json_loads(row))
+                except Exception:
+                    continue
+            else:
+                item = row
+            _consume_shared_item(item, analyzers)
+            if line_no % progress_interval == 0:
+                total_filtered = sum(a.filtered_count for a in analyzers.values())
+                print(f'  shared analyzer: {line_no:,} rows, {total_filtered:,} selected')
+    for analyzer in analyzers.values():
+        analyzer.finalize_loaded_data()
+    print(f'[Report] shared analysis {elapsed_log(started_at, started)} | '
+          f'input-bytes={os.path.getsize(filepath):,}')
+
+
 def generate_task_reports(client_dir, worker_dir, output_dir, args):
+    task_started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    task_started = time.perf_counter()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = tempfile.mkdtemp(prefix='kvcache_trace_report_')
@@ -2851,16 +3523,49 @@ def generate_task_reports(client_dir, worker_dir, output_dir, args):
     info_file = trace_file + '.info'
     print(f'\n[Task] client={client_dir} worker={worker_dir}')
     print(f'[Task] scenario hint={args.scenario}; auto detection remains evidence-based per trace.')
-    print(f'[Task] temporary correlation directory: {temp_dir}')
+    print(f'[Task] temporary correlation directory: {temp_dir} bytes=0')
     try:
-        client_dirs, worker_dirs = expand([client_dir]), expand([worker_dir])
+        client_dirs, worker_dirs = expand(client_dir), expand(worker_dir)
         if not client_dirs:
             print(f'[WARN] client directory does not exist or is not a directory: {client_dir}')
         if not worker_dirs:
             print(f'[WARN] worker directory does not exist or is not a directory: {worker_dir}')
-        records, info_records = phase1(client_dirs, worker_dirs, temp_dir, args.shard_bits, args.jobs,
-                                       os.path.join(temp_dir, 'info'))
-        if records == 0:
+        client_access_files = find_files(client_dirs, CLIENT_ACCESS_PATTERNS)
+        requested = ['DS_KV_CLIENT_GET', 'DS_KV_CLIENT_SET']
+        if args.report_type == 'get':
+            requested = ['DS_KV_CLIENT_GET']
+        elif args.report_type == 'set':
+            requested = ['DS_KV_CLIENT_SET']
+        phase_started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+        phase_started = time.perf_counter()
+        trace_filter = _collect_client_trace_ids(
+            client_access_files, temp_dir, args.shard_bits, requested,
+            parse_timestamp(args.from_time) if args.from_time else None,
+            parse_timestamp(args.to_time) if args.to_time else None,
+            args.latency_threshold, args.error_only, args.jobs)
+        print(f'[Phase 0] client Trace pre-filter: {len(trace_filter)} trace ids | '
+              f'{elapsed_log(phase_started_at, phase_started)}')
+        # Pass 1b: Worker access is the admission signal.  Only traces observed
+        # by a Worker are allowed into the detailed INFO/RPC/URMA pass.
+        phase_started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+        phase_started = time.perf_counter()
+        phase1(client_dirs, worker_dirs, temp_dir, args.shard_bits, args.jobs,
+               None, trace_filter=trace_filter, skip_client_access=True, only_ptypes=[2],
+               worker_seen_dir=os.path.join(temp_dir, 'worker_seen'))
+        print(f'[Phase 1a] worker access admission {elapsed_log(phase_started_at, phase_started)}')
+        worker_seen = _collect_worker_access_trace_ids(
+            seen_dir=os.path.join(temp_dir, 'worker_seen'))
+        missing_worker = trace_filter - worker_seen
+        print(f'[Phase 1b] Worker access matched: {len(worker_seen)}; '
+              f'Worker access missing: {len(missing_worker)} (INFO skipped)')
+        phase_started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+        phase_started = time.perf_counter()
+        records, info_records = phase1(
+            client_dirs, worker_dirs, temp_dir, args.shard_bits, args.jobs,
+            os.path.join(temp_dir, 'info'), trace_filter=worker_seen,
+            skip_client_access=True, only_ptypes=[1, 3])
+        print(f'[Phase 1b] detailed trace parsing {elapsed_log(phase_started_at, phase_started)}')
+        if records == 0 and not trace_filter:
             print('[WARN] no trace-bearing log records were collected; no report was generated.')
             return []
         traces = phase2(temp_dir, trace_file, args.jobs, {})
@@ -2868,30 +3573,51 @@ def generate_task_reports(client_dir, worker_dir, output_dir, args):
             print('[WARN] access traces could not be correlated; verify client access logs and trace_id sampling.')
             return []
         if info_records:
+            phase_started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+            phase_started = time.perf_counter()
             merge_info_files(os.path.join(temp_dir, 'info'), info_file)
+            print(f'[Info] merge {elapsed_log(phase_started_at, phase_started)}')
         reports = []
         report_types = ('get', 'set') if args.report_type == 'setandget' else (args.report_type,)
         if args.qps:
             print('[Report] QPS: enabled (10ms aggregation and chart payload).')
         else:
             print('[Report] QPS: disabled; skipped 10ms aggregation and QPS HTML payload.')
+        analyzers = {}
+        for request_type in report_types:
+            key = 'DS_KV_CLIENT_GET' if request_type == 'get' else 'DS_KV_CLIENT_SET'
+            analyzers[key] = KVCacheAnalyzer(
+                trace_file, filters=_filters_for(key, args), top_n=args.top,
+                window_ms=args.window_ms, collect_qps=args.qps)
+        use_parallel_analysis = (args.jobs > 1 and
+                                 os.path.getsize(trace_file) >= PARALLEL_ANALYSIS_MIN_BYTES)
+        if use_parallel_analysis:
+            load_analyzers_parallel(trace_file, analyzers, args.jobs, temp_dir)
+        elif len(analyzers) > 1:
+            print('[Report] GET/SET share one intermediate-data decode pass.')
+            load_analyzers_once(trace_file, analyzers)
         for request_type in report_types:
             output = output_dir / f'kvcache.{request_type}.html'
             print(f'[Report] generating {request_type.upper()} HTML: {output}')
-            analyzer = KVCacheAnalyzer(trace_file, filters=_filters_for(
-                'DS_KV_CLIENT_GET' if request_type == 'get' else 'DS_KV_CLIENT_SET', args),
-                top_n=args.top, window_ms=args.window_ms, collect_qps=args.qps)
-            analyzer.generate_html(str(output))
+            key = 'DS_KV_CLIENT_GET' if request_type == 'get' else 'DS_KV_CLIENT_SET'
+            analyzer = analyzers[key]
+            analyzer.generate_html(
+                str(output),
+                load_data=len(analyzers) == 1 and not use_parallel_analysis)
             if output.exists() and output.stat().st_size > 0:
                 reports.append(str(output))
                 print(f'[Report] generated {output} ({output.stat().st_size:,} bytes)')
             else:
                 print(f'[ERROR] HTML output was not created: {output}')
+        print(f'[Task] total {elapsed_log(task_started_at, task_started)}')
         return reports
     except Exception as error:
         print(f'[ERROR] report generation failed: {type(error).__name__}: {error}', file=sys.stderr)
         raise
     finally:
+        temp_bytes = sum(os.path.getsize(os.path.join(directory, name))
+                         for directory, _, names in os.walk(temp_dir) for name in names)
+        print(f'[Task] temporary correlation directory before cleanup: {temp_dir} bytes={temp_bytes}')
         shutil.rmtree(temp_dir, ignore_errors=True)
         print('[Cleanup] temporary correlation data removed.')
 
@@ -2906,24 +3632,30 @@ def main():
   <task>/collected_worker_logs/workers/.../access*.log[.gz]
   <task>/collected_worker_logs/workers/.../kvcache*INFO*.log[.gz]
 
+Mixed layout selected with -p (extra nesting is allowed):
+  <rootDir>/jingpai*/client*/ds_client_access*.log[.gz]
+  <rootDir>/jingpai*/worker*/access*.log[.gz]
+
 Use case: offline GET/SET latency diagnosis in meta-owner, same-node, and
 local-cache deployments. Client/worker records correlate on any non-empty
 trace-id field except '-', 'null', or 'None'; UUID format is not required.
 
-Constraints: -f is one task; -list contains one task per non-comment line.
+Constraints: -f is one collection root; -list contains one task per non-comment line.
+With -p, only matching second-level mixed collection directories are scanned.
 Relative list entries use --client-path/--worker-path or the current directory.
 -j, --shard-bits, and --window-ms must be positive. -qps false avoids the
 10ms QPS aggregation and its large HTML payload for high-QPS/long-running logs.
 
 Examples:
   python3 kvcache_trace_report.py -f /path/to/task -type setandget -j 32
+  python3 kvcache_trace_report.py -f /path/to/rootDir -p jingpai -type setandget -j 32
   python3 kvcache_trace_report.py -f /path/to/task -type get -qps false
   python3 kvcache_trace_report.py -list html.txt --client-path /logs/client \\
       --worker-path /logs/worker --output-dir report -type get -j 32
   python3 kvcache_trace_report.py -h''',
     )
     input_group = parser.add_mutually_exclusive_group()
-    input_group.add_argument('-f', '--folder', default='.', help='one task directory (default: current directory)')
+    input_group.add_argument('-f', '--folder', default='.', help='collection root directory (default: current directory)')
     input_group.add_argument('-list', '--list', dest='list_file', help='one task directory per line')
     parser.add_argument('-type', '--type', dest='report_type', choices=('set', 'get', 'setandget'), default='setandget')
     parser.add_argument('-j', '--jobs', type=int, default=32, help='parser worker processes (default: 32)')
@@ -2931,6 +3663,8 @@ Examples:
                         help='include 10ms QPS aggregation/chart; false reduces memory and HTML size (default: true)')
     parser.add_argument('--client-path', help='client root for relative list entries')
     parser.add_argument('--worker-path', help='worker root for relative list entries')
+    parser.add_argument('-p', '--prefix', help='only scan second-level mixed collection directories with this prefix')
+    parser.add_argument('--cross-node', action='store_true', help='fetch the root from Kubernetes nodes before local processing')
     parser.add_argument('--scenario', choices=('auto', 'meta-owner', 'same-node', 'local-cache'), default='auto',
                         help='record the expected deployment path in progress logs; parsing remains log-evidence based')
     parser.add_argument('--output-dir', default='report', help='report root (default: ./report)')
@@ -2951,6 +3685,19 @@ Examples:
     print('=' * 72)
     for task in tasks:
         client_dir, worker_dir = _task_paths(task, args.client_path, args.worker_path)
+        if not args.list_file:
+            try:
+                if args.cross_node:
+                    wanted = ['DS_KV_CLIENT_GET', 'DS_KV_CLIENT_SET']
+                    if args.report_type == 'get':
+                        wanted = ['DS_KV_CLIENT_GET']
+                    elif args.report_type == 'set':
+                        wanted = ['DS_KV_CLIENT_SET']
+                    task = Path(stage_cross_node(str(task), args.jobs, args.prefix, wanted))
+                    client_dir, worker_dir = _task_paths(task, args.client_path, args.worker_path)
+                client_dir, worker_dir = discover_log_roots(str(task), args.prefix)
+            except ValueError as exc:
+                parser.error(str(exc))
         target = Path(args.output_dir) / task.name if len(tasks) > 1 else Path(args.output_dir)
         generate_task_reports(client_dir, worker_dir, target, args)
 
