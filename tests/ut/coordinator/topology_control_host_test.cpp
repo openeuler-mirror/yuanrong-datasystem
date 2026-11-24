@@ -25,11 +25,14 @@
 #include "gmock/gmock.h"
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
+#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
+#include "datasystem/cluster/control/topology_controller.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
 #include "datasystem/common/coordinator/steady_clock.h"
@@ -455,7 +458,6 @@ TEST_F(TopologyControlHostTest, ValidatesOptionsAndKeepsStartOneShot)
 TEST_F(TopologyControlHostTest, WorkerFailureSummariesRequireReporterThreshold)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
     auto snapshot = MakeActiveSnapshot(6);
@@ -464,10 +466,10 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesRequireReporterThreshold)
     for (size_t index = 0; index < 4; ++index) {
         host_->RecordWorkerFailureSummaries("", snapshot->Members()[index].identity.address, { target });
     }
-    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
 
     host_->RecordWorkerFailureSummaries("", snapshot->Members()[4].identity.address, { target });
-    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships);
     ASSERT_EQ(candidates.size(), 1);
     EXPECT_EQ(candidates.front().address, target);
 }
@@ -475,7 +477,6 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesRequireReporterThreshold)
 TEST_F(TopologyControlHostTest, TwoWorkerFailureSummaryProducesProbeCandidate)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
     auto snapshot = MakeActiveSnapshot(2);
@@ -485,15 +486,576 @@ TEST_F(TopologyControlHostTest, TwoWorkerFailureSummaryProducesProbeCandidate)
 
     host_->RecordWorkerFailureSummaries("", reporter, { target });
 
-    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships);
     ASSERT_EQ(candidates.size(), 1);
     EXPECT_EQ(candidates.front().address, target);
+}
+
+TEST_F(TopologyControlHostTest, StaleSummaryVersionDoesNotOverwriteNewerFailureEvidence)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    const auto reporter = snapshot->Members()[0].identity.address;
+    const auto target = snapshot->Members()[1].identity.address;
+    const cluster::MembershipRecord reporterRecord = memberships[0];
+    const cluster::MembershipRecord targetRecord = memberships[1];
+
+    // Vote lands at version 5; a resurrected stale version-3 empty heartbeat must not retract
+    // the vote that the newer version-5 summary still holds.
+    host_->RecordWorkerFailureSummaries("", reporterRecord, { targetRecord }, 5);
+    host_->RecordWorkerFailureSummaries("", reporterRecord, {}, 3);
+    auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships);
+    ASSERT_EQ(candidates.size(), 1);
+    EXPECT_EQ(candidates.front().address, target);
+
+    // Version 6 with an empty summary is the accepted retraction; a resurrected version-5
+    // heartbeat voting for the target again must not resurrect the retracted vote.
+    host_->RecordWorkerFailureSummaries("", reporterRecord, {}, 6);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+    host_->RecordWorkerFailureSummaries("", reporterRecord, { targetRecord }, 5);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+
+    // A new membership incarnation rebases the version baseline: version 1 after a restart is
+    // fresh evidence, not a stale heartbeat.
+    auto renewedMemberships = memberships;
+    for (auto &record : renewedMemberships) {
+        if (record.address == reporter) {
+            record.timestamp = 200;
+        }
+    }
+    cluster::MembershipRecord renewedReporter = memberships[0];
+    renewedReporter.timestamp = 200;
+    host_->RecordWorkerFailureSummaries("", renewedReporter, { targetRecord }, 1);
+    candidates = host_->GetIsolationCandidates("", *snapshot, renewedMemberships);
+    ASSERT_EQ(candidates.size(), 1);
+    EXPECT_EQ(candidates.front().address, target);
+}
+
+TEST_F(TopologyControlHostTest, FirstEmptySummaryStillGuardsVersionBaseline)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = snapshot->Members()[1].identity.address;
+
+    // An empty summary from a fresh reporter still records the version baseline: a resurrected
+    // older non-empty heartbeat must not create votes afterwards.
+    host_->RecordWorkerFailureSummaries("", memberships[0], {}, 5);
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 4);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 6);
+    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships);
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target);
+}
+
+TEST_F(TopologyControlHostTest, StaleSnapshotPruneKeepsRenewalBaselineForLateHeartbeatFence)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    const auto reporter = memberships[0];
+    const auto target = memberships[1].address;
+    constexpr int64_t renewalRevision = 15;
+
+    // The reporter renews its membership at revision 15 and lands the newer empty summary: the
+    // version baseline guards against an older non-empty heartbeat from the same renewal.
+    host_->RecordWorkerFailureSummaries("", reporter, {}, 5, renewalRevision);
+
+    // A membership snapshot taken before the renewal (revision 10, reporter absent) must not
+    // erase the renewal baseline: dropping the high-water mark would let the late heartbeat's
+    // old votes back in after the stale prune.
+    const std::vector<cluster::MembershipRecord> staleView = { memberships[1] };
+    (void)host_->GetIsolationCandidates("", *snapshot, staleView, 10);
+
+    // The late version-4 heartbeat bound to the same renewal stays rejected: the fence only
+    // holds because the stale prune kept the baseline.
+    host_->RecordWorkerFailureSummaries("", reporter, { memberships[1] }, 4, renewalRevision);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+
+    // A newer summary from the same renewal applies normally: the fence is intact, not broken.
+    host_->RecordWorkerFailureSummaries("", reporter, { memberships[1] }, 6, renewalRevision);
+    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships);
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target);
+}
+
+TEST_F(TopologyControlHostTest, StaleSnapshotViewKeepsNewVotesAndCandidacyContinuous)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    auto memberships = MakeReadyMemberships(*snapshot);
+    const auto reporter = memberships[0];
+    const auto target = memberships[1].address;
+
+    // The reporter votes under a renewal newer than the controller's membership read.
+    host_->RecordWorkerFailureSummaries("", reporter, { memberships[1] }, 4, 15);
+    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships);
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target);
+
+    // The stale view (revision 10, reporter absent) keeps the accepted vote counted so the
+    // candidate set stays continuous instead of flapping the probe schedule.
+    const std::vector<cluster::MembershipRecord> staleView = { memberships[1] };
+    const auto staleCandidates = host_->GetIsolationCandidates("", *snapshot, staleView, 10);
+    ASSERT_EQ(staleCandidates.size(), 1U);
+    EXPECT_EQ(staleCandidates.front().address, target);
+
+    // A view at least as new as the renewal prunes normally: absence now means the reporter
+    // really left, so the vote and its baseline disappear with the reporter.
+    const auto freshPruned = host_->GetIsolationCandidates("", *snapshot, staleView, 20);
+    EXPECT_TRUE(freshPruned.empty());
+}
+
+TEST_F(TopologyControlHostTest, StaleIncarnationHeartbeatCannotResurrectOrRetractVotes)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = snapshot->Members()[1].identity.address;
+    cluster::MembershipRecord oldReporter = memberships[0];
+    oldReporter.timestamp = 100;
+    cluster::MembershipRecord newReporter = memberships[0];
+    newReporter.timestamp = 200;
+    auto oldMemberships = memberships;
+    oldMemberships[0].timestamp = 100;
+    auto newMemberships = memberships;
+    newMemberships[0].timestamp = 200;
+
+    // New incarnation heartbeat lands first (empty retraction at version 1); a resurrected
+    // old-incarnation handler must not resurrect votes even with a higher version number.
+    host_->RecordWorkerFailureSummaries("", newReporter, {}, 1);
+    host_->RecordWorkerFailureSummaries("", oldReporter, { memberships[1] }, 5);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, oldMemberships).empty());
+
+    // New incarnation votes; an old-incarnation empty heartbeat must not retract them.
+    host_->RecordWorkerFailureSummaries("", newReporter, { memberships[1] }, 2);
+    auto candidates = host_->GetIsolationCandidates("", *snapshot, newMemberships);
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.front().address, target);
+    host_->RecordWorkerFailureSummaries("", oldReporter, {}, 4);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, newMemberships).size(), 1U);
+}
+
+TEST_F(TopologyControlHostTest, MembershipRevisionFencesResurrectedKeepAliveHandler)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = snapshot->Members()[1].identity.address;
+
+    // Same membership revision: the summary version alone orders resurrected handlers.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 5, 10);
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 4, 10);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, memberships).size(), 1U);
+    host_->RecordWorkerFailureSummaries("", memberships[0], {}, 6, 10);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 5, 10);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+
+    // A membership replacement rebases the fence: a resurrected old-revision handler stays stale
+    // even with a much higher summary version, and can neither vote nor retract.
+    cluster::MembershipRecord replacement = memberships[0];
+    replacement.timestamp = 200;
+    auto renewedMemberships = memberships;
+    renewedMemberships[0].timestamp = 200;
+    host_->RecordWorkerFailureSummaries("", replacement, { memberships[1] }, 2, 12);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, renewedMemberships).size(), 1U);
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 100, 10);
+    // The rejected old-revision handler changes nothing: the replacement's vote keeps its
+    // identity and stays eligible under the replacement memberships view.
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, renewedMemberships).size(), 1U);
+    host_->RecordWorkerFailureSummaries("", memberships[0], {}, 99, 10);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, renewedMemberships).size(), 1U);
+}
+
+TEST_F(TopologyControlHostTest, EvidenceGenerationAdvancesVersionPerAccusationWave)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = snapshot->Members()[1].identity.address;
+
+    auto evidenceVersion = [&]() -> uint64_t {
+        const auto versions = host_->GetActiveFailureEvidenceVersions(
+            "", { snapshot->Members()[1].identity });
+        const auto wave = versions.find(target);
+        return wave == versions.end() ? 0 : wave->second;
+    };
+
+    // A new reporter's first qualified accusation starts the evidence version at one.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 1, 10, { { target, 1 } });
+    EXPECT_EQ(evidenceVersion(), 1U);
+
+    // Re-asserting the same generation is an idle keepalive re-statement, not a new wave.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 2, 10, { { target, 1 } });
+    EXPECT_EQ(evidenceVersion(), 1U);
+
+    // Legacy wire without a generation keeps re-assertions inert.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 3, 10);
+    EXPECT_EQ(evidenceVersion(), 1U);
+
+    // The same reporter's next qualification wave advances the aggregate evidence version.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 4, 10, { { target, 2 } });
+    EXPECT_EQ(evidenceVersion(), 2U);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, memberships).size(), 1U);
+}
+
+TEST_F(TopologyControlHostTest, LegacySummaryFencedByAcceptedRevision)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+
+    // A pre-upgrade Worker sends no summary_version (0) but its renewal still carried a
+    // membership revision; even its first empty summary must record that revision baseline.
+    cluster::MembershipRecord staleReporter = memberships[0];
+    staleReporter.timestamp = 100;
+    auto staleMemberships = memberships;
+    staleMemberships[0].timestamp = 100;
+    host_->RecordWorkerFailureSummaries("", staleReporter, {}, 0, 10);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, staleMemberships).empty());
+
+    // The replacement lands with a newer membership revision and votes.
+    cluster::MembershipRecord replacement = memberships[0];
+    replacement.timestamp = 200;
+    auto renewedMemberships = memberships;
+    renewedMemberships[0].timestamp = 200;
+    host_->RecordWorkerFailureSummaries("", replacement, { memberships[1] }, 1, 12);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, renewedMemberships).size(), 1U);
+
+    // The resurrected legacy handler renewed the old revision: neither its non-empty vote nor its
+    // empty retraction may apply, because the revision fence precedes the zero-version bypass.
+    host_->RecordWorkerFailureSummaries("", staleReporter, { memberships[1] }, 0, 10);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, renewedMemberships).size(), 1U);
+    host_->RecordWorkerFailureSummaries("", staleReporter, {}, 0, 10);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, renewedMemberships).size(), 1U);
+
+    // The replacement's own lineage keeps working after the stale handlers drained.
+    host_->RecordWorkerFailureSummaries("", replacement, {}, 2, 12);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, renewedMemberships).empty());
+}
+
+TEST_F(TopologyControlHostTest, FirstLegacyEmptySummarySavesRevisionBaseline)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+
+    // The very first summary a legacy Worker sends is an empty retraction, yet it carries an
+    // accepted revision: it must still save the baseline.
+    host_->RecordWorkerFailureSummaries("", memberships[0], {}, 0, 10);
+
+    // An older accepted revision is fenced even though the summary sequence is absent.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 0, 9);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+
+    // A newer revision still votes normally.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 0, 11);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, memberships).size(), 1U);
+}
+
+TEST_F(TopologyControlHostTest, LegacyRetractionWithinSameIncarnationStillApplies)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+
+    // Wire compatibility: within one incarnation the legacy empty summary is the only withdrawal
+    // channel, so it must still retract (zero only skips the missing sequence comparison).
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 0, 10);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, memberships).size(), 1U);
+    host_->RecordWorkerFailureSummaries("", memberships[0], {}, 0, 10);
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+}
+
+TEST_F(TopologyControlHostTest, EvidenceVersionTableCleanupAndMonotonicSequence)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(4);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto firstTarget = snapshot->Members()[1].identity;
+    const auto secondTarget = snapshot->Members()[2].identity;
+    const auto firstAddress = firstTarget.address;
+    const auto secondAddress = secondTarget.address;
+    auto versionsOf = [&](const std::vector<cluster::MemberIdentity> &targets) {
+        return host_->GetActiveFailureEvidenceVersions("", targets);
+    };
+
+    // Two fresh accusations draw consecutive sequence values.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1], memberships[2] }, 1, 10);
+    auto versions = versionsOf({ firstTarget, secondTarget });
+    EXPECT_EQ(versions[firstAddress], 1U);
+    EXPECT_EQ(versions[secondAddress], 2U);
+
+    // Candidate-scoped queries: empty lists and non-candidates see nothing.
+    EXPECT_TRUE(versionsOf({}).empty());
+    EXPECT_TRUE(versionsOf({ snapshot->Members()[3].identity }).empty());
+
+    // Retracting the first target drops its version entry together with the vote.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[2] }, 2, 10);
+    versions = versionsOf({ firstTarget, secondTarget });
+    EXPECT_EQ(versions.count(firstAddress), 0U);
+    EXPECT_EQ(versions[secondAddress], 2U);
+
+    // Re-accusing the first target continues the monotonic cluster sequence instead of
+    // restarting at 1; the second target's sticky re-assertion stays silent.
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1], memberships[2] }, 3, 10);
+    versions = versionsOf({ firstTarget, secondTarget });
+    EXPECT_EQ(versions[firstAddress], 3U);
+    EXPECT_EQ(versions[secondAddress], 2U);
+
+    // When the reporter loses membership, its votes AND its version baseline are pruned, so the
+    // whole cluster report entry dies and the sequence restarts. That reset is safe: the
+    // Controller prunes the candidates' probe state in lockstep, so a re-accusation's fresh
+    // version 1 still outranks the remembered evidenceVersionSeen of 0.
+    auto reducedMemberships = memberships;
+    reducedMemberships.erase(reducedMemberships.begin());
+    (void)host_->GetIsolationCandidates("", *snapshot, reducedMemberships);
+    EXPECT_TRUE(versionsOf({ firstTarget, secondTarget }).empty());
+
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 4, 10);
+    versions = versionsOf({ firstTarget });
+    EXPECT_EQ(versions[firstAddress], 1U);
+}
+
+TEST_F(TopologyControlHostTest, EvidenceVersionTableStaysBoundedAcrossManyTargets)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(10);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    std::vector<cluster::MemberIdentity> targets;
+    std::vector<cluster::MembershipRecord> targetRecords;
+    for (size_t index = 1; index <= 8; ++index) {
+        targets.push_back(snapshot->Members()[index].identity);
+        targetRecords.push_back(memberships[index]);
+    }
+    auto versionsOf = [&](const std::vector<cluster::MemberIdentity> &queried) {
+        return host_->GetActiveFailureEvidenceVersions("", queried);
+    };
+
+    // A reporter that keeps accusing and retracting many different targets must leave exactly the
+    // currently accused set in the version table, handing out an ever larger cluster sequence.
+    std::unordered_map<std::string, uint64_t> lastVersionByAddress;
+    uint64_t maxVersionSeen = 0;
+    std::vector<cluster::MembershipRecord> accused;
+    for (size_t wave = 0; wave < 4; ++wave) {
+        accused.clear();
+        for (size_t index = 0; index < targetRecords.size(); ++index) {
+            if (((index + wave) % 2) == 0) {
+                accused.push_back(targetRecords[index]);
+            }
+        }
+        host_->RecordWorkerFailureSummaries("", memberships[0], accused, wave + 1, 10);
+        const auto versions = versionsOf(targets);
+        EXPECT_EQ(versions.size(), accused.size());
+        for (const auto &record : accused) {
+            const auto iter = versions.find(record.address);
+            ASSERT_NE(iter, versions.end());
+            EXPECT_GT(iter->second, maxVersionSeen);
+            maxVersionSeen = iter->second;
+            lastVersionByAddress[record.address] = iter->second;
+        }
+    }
+
+    // Sticky re-assertions of the same votes must not advance the sequence.
+    host_->RecordWorkerFailureSummaries("", memberships[0], accused, 99, 10);
+    const auto sticky = versionsOf(targets);
+    EXPECT_EQ(sticky.size(), accused.size());
+    for (const auto &record : accused) {
+        EXPECT_EQ(sticky.at(record.address), lastVersionByAddress.at(record.address));
+    }
+
+    // Pruning the reporter drops every entry with the votes; the fresh accusation afterwards starts
+    // the sequence over, which is safe because the Controller prunes the candidates in lockstep.
+    auto reducedMemberships = memberships;
+    reducedMemberships.erase(reducedMemberships.begin());
+    (void)host_->GetIsolationCandidates("", *snapshot, reducedMemberships);
+    EXPECT_TRUE(versionsOf(targets).empty());
+    host_->RecordWorkerFailureSummaries("", memberships[0], { memberships[1] }, 100, 10);
+    EXPECT_EQ(versionsOf(targets).at(snapshot->Members()[1].identity.address), 1U);
+}
+
+TEST_F(TopologyControlHostTest, HostProvidedEvidenceVersionsReArmControllerProbeBackoff)
+{
+    const std::string clusterName = "host-provided-evidence-rearm";
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, clusterName);
+    auto snapshot = MakeActiveSnapshot(2);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto targetAddress = snapshot->Members()[1].identity.address;
+
+    // Controller side: the same real store-backed repository the Host runtime uses.
+    CoordinatorStoreBackend backend(*store_);
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    DS_ASSERT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
+    cluster::TopologyRepository repository(backend, *keys);
+    cluster::HashAlgorithm algorithm;
+    cluster::CoordinationEventDispatcher dispatcher(32);
+    cluster::TopologyState topology;
+    topology.version = 1;
+    topology.clusterHasInit = true;
+    topology.tokensPerMember = TEST_TOKENS_PER_MEMBER;
+    for (const auto &member : snapshot->Members()) {
+        topology.members.push_back(
+            cluster::Member{ member.identity, cluster::MemberState::ACTIVE, MakeMemberTokens(member.identity.address) });
+    }
+    std::string encodedTopology;
+    DS_ASSERT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(topology, encodedTopology));
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->Put(PhysicalTopologyKey(clusterName), encodedTopology, 0, COORDINATOR_NO_VERSION_CHECK,
+                             version, revision));
+    for (const auto &member : snapshot->Members()) {
+        cluster::MembershipValue value;
+        value.timestamp = 1;
+        value.lifecycleState = cluster::MemberLifecycleState::READY;
+        std::string encoded;
+        DS_ASSERT_OK(cluster::MembershipValueCodec::Encode(value, encoded));
+        DS_ASSERT_OK(store_->Put(PhysicalMembershipKey(clusterName, member.identity.address), encoded, 0,
+                                 COORDINATOR_NO_VERSION_CHECK, version, revision));
+    }
+
+    std::atomic<int64_t> nowMs{ 0 };
+    std::atomic<size_t> probeCalls{ 0 };
+    cluster::TopologyControllerOptions controllerOptions;
+    controllerOptions.reconcileTick = std::chrono::seconds(5);
+    controllerOptions.eventSourceMode = cluster::TopologyEventSourceMode::EXTERNAL;
+    controllerOptions.probeEpoch = "host-provided-evidence-rearm";
+    controllerOptions.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::milliseconds(nowMs.load()));
+    };
+    // The composition under test: the Controller consumes the real Host providers, so evidence
+    // recorded through the Host is what re-arms the Controller's probe schedule.
+    controllerOptions.failureSummaryCandidateProvider =
+        [this, clusterName](const cluster::TopologySnapshot &latest,
+                            const std::vector<cluster::MembershipRecord> &members,
+                            std::chrono::steady_clock::time_point, int64_t membershipSnapshotRevision) {
+            return host_->GetIsolationCandidates(clusterName, latest, members, membershipSnapshotRevision);
+        };
+    controllerOptions.failureEvidenceVersionProvider = [this, clusterName](
+                                                           const std::vector<cluster::MemberIdentity> &targets) {
+        return host_->GetActiveFailureEvidenceVersions(clusterName, targets);
+    };
+    controllerOptions.activeFailureCommitFence =
+        [](const cluster::TopologySnapshot &, const std::vector<cluster::MembershipRecord> &,
+           std::chrono::steady_clock::time_point, std::optional<uint64_t>,
+           const std::vector<cluster::MemberIdentity> &, const std::function<Status(int64_t)> &) {
+            return Status::OK();
+        };
+    controllerOptions.memberLivenessProbe = [&](const std::vector<cluster::MemberIdentity> &targets, auto) {
+        ++probeCalls;
+        return std::vector<cluster::ControlBackendProbeResult>{ { targets.front(), std::nullopt,
+                                                                  cluster::ControlBackendProbeOutcome::RESPONSE,
+                                                                  std::chrono::milliseconds(1) } };
+    };
+    cluster::TopologyController controller(backend, repository, *keys, algorithm, dispatcher, controllerOptions);
+
+    // Worker side: the real summary source, so the generations flowing into the Host are the
+    // ones a keepalive would actually carry. Batch one spans the window and qualifies on the
+    // record path; batch two lands entirely inside the window and only keepalive time matures
+    // it, exercising the read-path re-qualification of an already reported entry.
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restoreNodeTimeout([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    cluster::DsCoordinationBackend workerBackend(nullptr, snapshot->Members()[0].identity.address);
+    HostPort workerTarget;
+    DS_ASSERT_OK(workerTarget.ParseString(targetAddress));
+    const auto batchOne = std::chrono::steady_clock::time_point(std::chrono::seconds(100));
+    workerBackend.RecordPeerRpcFailure(workerTarget, batchOne - std::chrono::milliseconds(1'500));
+    workerBackend.RecordPeerRpcFailure(workerTarget, batchOne - std::chrono::milliseconds(750));
+    workerBackend.RecordPeerRpcFailure(workerTarget, batchOne);
+    std::vector<uint64_t> workerGenerations;
+    ASSERT_EQ(workerBackend.GetFailedTargets(batchOne, &workerGenerations),
+              (std::vector<std::string>{ targetAddress }));
+    ASSERT_EQ(workerGenerations.size(), 1U);
+    const std::unordered_map<std::string, uint64_t> firstGeneration{ { targetAddress,
+                                                                       workerGenerations.front() } };
+
+    // A wave of failure evidence lands in the Host first.
+    host_->RecordWorkerFailureSummaries(clusterName, memberships[0], { memberships[1] }, 1, 10, firstGeneration);
+
+    const auto poke = [&](int64_t atMs) {
+        nowMs.store(atMs);
+        return controller.SubmitCoordinationEvent({ cluster::CoordinationEventType::RESET, "", "", 0, 0 });
+    };
+    const auto waitForProbes = [&](size_t wanted) {
+        for (size_t retry = 0; retry < 1'000 && probeCalls.load() < wanted; ++retry) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return probeCalls.load() >= wanted;
+    };
+
+    DS_ASSERT_OK(controller.Start());
+    DS_ASSERT_OK(poke(0));
+    ASSERT_TRUE(waitForProbes(1U));
+
+    // The reachable result backs off the next probe; a sticky re-assertion of the same evidence
+    // generation must not re-arm it.
+    DS_ASSERT_OK(poke(1'000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_EQ(probeCalls.load(), 1U);
+    host_->RecordWorkerFailureSummaries(clusterName, memberships[0], { memberships[1] }, 2, 10, firstGeneration);
+    DS_ASSERT_OK(poke(1'100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_EQ(probeCalls.load(), 1U);
+
+    // The same reporter's next qualified batch only matures on keepalive time: the read path
+    // hands the already reported entry a fresh generation, which must re-arm the probe
+    // immediately even though the reachable backoff window is still open.
+    const auto batchTwo = batchOne + std::chrono::milliseconds(10'000);
+    workerBackend.RecordPeerRpcFailure(workerTarget, batchTwo);
+    workerBackend.RecordPeerRpcFailure(workerTarget, batchTwo + std::chrono::milliseconds(100));
+    workerBackend.RecordPeerRpcFailure(workerTarget, batchTwo + std::chrono::milliseconds(200));
+    ASSERT_EQ(workerBackend.GetFailedTargets(batchTwo + std::chrono::milliseconds(2'000), &workerGenerations),
+              (std::vector<std::string>{ targetAddress }));
+    ASSERT_EQ(workerGenerations.size(), 1U);
+    const std::unordered_map<std::string, uint64_t> nextGeneration{ { targetAddress,
+                                                                      workerGenerations.front() } };
+    ASSERT_GT(nextGeneration.at(targetAddress), firstGeneration.at(targetAddress));
+    host_->RecordWorkerFailureSummaries(clusterName, memberships[0], { memberships[1] }, 3, 10, nextGeneration);
+    DS_ASSERT_OK(poke(1'200));
+    ASSERT_TRUE(waitForProbes(2U));
+
+    // Without new failures the generation stays stable and no further probe is forced.
+    host_->RecordWorkerFailureSummaries(clusterName, memberships[0], { memberships[1] }, 4, 10, nextGeneration);
+    DS_ASSERT_OK(poke(1'300));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_EQ(probeCalls.load(), 2U);
+
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
 TEST_F(TopologyControlHostTest, ConcurrentFailuresUseAllRemainingEligibleReporters)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
     auto snapshot = MakeActiveSnapshot(4);
@@ -502,10 +1064,10 @@ TEST_F(TopologyControlHostTest, ConcurrentFailuresUseAllRemainingEligibleReporte
     const auto target = snapshot->Members()[2].identity.address;
 
     host_->RecordWorkerFailureSummaries("", memberships[0].address, { target });
-    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
 
     host_->RecordWorkerFailureSummaries("", memberships[1].address, { target });
-    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("", *snapshot, memberships);
     ASSERT_EQ(candidates.size(), 1UL);
     EXPECT_EQ(candidates.front().address, target);
 }
@@ -513,7 +1075,6 @@ TEST_F(TopologyControlHostTest, ConcurrentFailuresUseAllRemainingEligibleReporte
 TEST_F(TopologyControlHostTest, ConcurrentFailuresNeverUseOneReporterInLargerCluster)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
     auto snapshot = MakeActiveSnapshot(4);
@@ -523,13 +1084,12 @@ TEST_F(TopologyControlHostTest, ConcurrentFailuresNeverUseOneReporterInLargerClu
 
     host_->RecordWorkerFailureSummaries("", memberships[0].address, { target });
 
-    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
 }
 
 TEST_F(TopologyControlHostTest, WorkerFailureSummaryResetRemovesProbeCandidate)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
     auto snapshot = MakeActiveSnapshot(2);
@@ -538,10 +1098,35 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummaryResetRemovesProbeCandidate)
     const auto target = snapshot->Members()[1].identity.address;
 
     host_->RecordWorkerFailureSummaries("", reporter, { target });
-    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now()).size(), 1UL);
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, memberships).size(), 1UL);
 
     host_->RecordWorkerFailureSummaries("", reporter, {});
-    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
+}
+
+TEST_F(TopologyControlHostTest, VotesSurviveBeyondActiveFailureWindowUntilRetraction)
+{
+    auto options = MakeOptions();
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
+    TopologyControlHostTestPeer::AddRunningEntry(*host_, "");
+    auto snapshot = MakeActiveSnapshot(6);
+    const auto memberships = MakeReadyMemberships(*snapshot);
+    const auto target = snapshot->Members()[5].identity.address;
+
+    for (size_t index = 0; index < 5; ++index) {
+        host_->RecordWorkerFailureSummaries("", snapshot->Members()[index].identity.address, { target });
+    }
+    ASSERT_EQ(host_->GetIsolationCandidates("", *snapshot, memberships).size(), 1UL);
+
+    clock_->AdvanceMs(30'000);
+    const auto survived = host_->GetIsolationCandidates("", *snapshot, memberships);
+    ASSERT_EQ(survived.size(), 1UL);
+    EXPECT_EQ(survived.front().address, target);
+
+    for (size_t index = 0; index < 5; ++index) {
+        host_->RecordWorkerFailureSummaries("", snapshot->Members()[index].identity.address, {});
+    }
+    EXPECT_TRUE(host_->GetIsolationCandidates("", *snapshot, memberships).empty());
 }
 
 TEST_F(TopologyControlHostTest, ActiveFailureCommitDoesNotBlockOtherClusterReports)
@@ -587,7 +1172,6 @@ TEST_F(TopologyControlHostTest, ActiveFailureCommitDoesNotBlockOtherClusterRepor
 TEST_F(TopologyControlHostTest, WorkerFailureSummariesIgnoreStaleTargetIncarnation)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(6);
@@ -602,13 +1186,12 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesIgnoreStaleTargetIncarnati
         }
     }
 
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships).empty());
 }
 
 TEST_F(TopologyControlHostTest, WorkerFailureSummariesCanIsolateActiveTargetAfterTargetMembershipExpired)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(3);
@@ -621,7 +1204,7 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesCanIsolateActiveTargetAfte
         host_->RecordWorkerFailureSummaries("blue", memberships[index], { expiredTarget });
     }
 
-    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships);
     ASSERT_EQ(candidates.size(), 1UL);
     EXPECT_EQ(candidates.front().address, target.address);
 }
@@ -629,7 +1212,6 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesCanIsolateActiveTargetAfte
 TEST_F(TopologyControlHostTest, WorkerFailureSummariesIgnoreUnknownIncarnationAfterTargetMembershipReturns)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(3);
@@ -640,13 +1222,12 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesIgnoreUnknownIncarnationAf
         host_->RecordWorkerFailureSummaries("blue", memberships[index], { unknownTarget });
     }
 
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships).empty());
 }
 
-TEST_F(TopologyControlHostTest, WorkerFailureSummariesExpireAndIgnoreInactiveMembers)
+TEST_F(TopologyControlHostTest, WorkerFailureSummariesSurviveTimeAndIgnoreInactiveMembers)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(6);
@@ -656,20 +1237,17 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesExpireAndIgnoreInactiveMem
         host_->RecordWorkerFailureSummaries("blue", snapshot->Members()[index].identity.address, { target });
     }
 
-    clock_->AdvanceMs(std::chrono::duration_cast<std::chrono::milliseconds>(options.activeFailureWindow).count() + 1);
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    // Votes from active reporters survive time; only retraction or membership loss clears them.
+    clock_->AdvanceMs(30'000);
+    EXPECT_EQ(host_->GetIsolationCandidates("blue", *snapshot, memberships).size(), 1UL);
 
-    for (size_t index = 0; index < 5; ++index) {
-        host_->RecordWorkerFailureSummaries("blue", snapshot->Members()[index].identity.address, { target });
-    }
     memberships.resize(1);
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships).empty());
 }
 
 TEST_F(TopologyControlHostTest, WorkerFailureSummariesSurviveOneReporterFailureWhenQuorumRemains)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(7);
@@ -680,7 +1258,7 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesSurviveOneReporterFailureW
     }
 
     memberships.erase(memberships.begin());
-    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships);
 
     ASSERT_EQ(candidates.size(), 1UL);
     EXPECT_EQ(candidates.front().address, target);
@@ -689,7 +1267,6 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummariesSurviveOneReporterFailureW
 TEST_F(TopologyControlHostTest, WorkerFailureSummaryRefreshDoesNotCountDuplicateReporter)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(6);
@@ -698,12 +1275,12 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummaryRefreshDoesNotCountDuplicate
 
     host_->RecordWorkerFailureSummaries("blue", snapshot->Members()[0].identity.address, { target });
     host_->RecordWorkerFailureSummaries("blue", snapshot->Members()[0].identity.address, { target });
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships).empty());
 
     for (size_t index = 1; index < 5; ++index) {
         host_->RecordWorkerFailureSummaries("blue", snapshot->Members()[index].identity.address, { target });
     }
-    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships);
     ASSERT_EQ(candidates.size(), 1UL);
     EXPECT_EQ(candidates.front().address, target);
 }
@@ -711,7 +1288,6 @@ TEST_F(TopologyControlHostTest, WorkerFailureSummaryRefreshDoesNotCountDuplicate
 TEST_F(TopologyControlHostTest, ReporterTimestampChangeInvalidatesFailureSummaryEvidence)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(6);
@@ -723,10 +1299,10 @@ TEST_F(TopologyControlHostTest, ReporterTimestampChangeInvalidatesFailureSummary
         host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
     }
 
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships).empty());
 
     host_->RecordWorkerFailureSummaries("blue", memberships[0], { target });
-    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships);
     ASSERT_EQ(candidates.size(), 1U);
     EXPECT_EQ(candidates.front().address, target.address);
 }
@@ -734,7 +1310,6 @@ TEST_F(TopologyControlHostTest, ReporterTimestampChangeInvalidatesFailureSummary
 TEST_F(TopologyControlHostTest, ReporterHostIdChangeInvalidatesFailureSummaryEvidence)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(6);
@@ -746,10 +1321,10 @@ TEST_F(TopologyControlHostTest, ReporterHostIdChangeInvalidatesFailureSummaryEvi
         host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
     }
 
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships).empty());
 
     host_->RecordWorkerFailureSummaries("blue", memberships[0], { target });
-    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships);
     ASSERT_EQ(candidates.size(), 1U);
     EXPECT_EQ(candidates.front().address, target.address);
 }
@@ -757,7 +1332,6 @@ TEST_F(TopologyControlHostTest, ReporterHostIdChangeInvalidatesFailureSummaryEvi
 TEST_F(TopologyControlHostTest, ExitingLeavingReportersCanIsolateActiveTarget)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeSnapshot({ cluster::MemberState::LEAVING, cluster::MemberState::LEAVING,
@@ -775,7 +1349,7 @@ TEST_F(TopologyControlHostTest, ExitingLeavingReportersCanIsolateActiveTarget)
         host_->RecordWorkerFailureSummaries("blue", reporter, { expiredTarget });
     }
 
-    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships);
 
     ASSERT_EQ(candidates.size(), 1U);
     EXPECT_EQ(candidates.front().address, target.address);
@@ -784,7 +1358,6 @@ TEST_F(TopologyControlHostTest, ExitingLeavingReportersCanIsolateActiveTarget)
 TEST_F(TopologyControlHostTest, ReadyEvidenceDoesNotBecomeEligibleAfterReporterStartsExiting)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto activeSnapshot = MakeActiveSnapshot(6);
@@ -803,13 +1376,12 @@ TEST_F(TopologyControlHostTest, ReadyEvidenceDoesNotBecomeEligibleAfterReporterS
         membership.state = cluster::MemberLifecycleState::EXITING;
     }
 
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *leavingSnapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *leavingSnapshot, memberships).empty());
 }
 
 TEST_F(TopologyControlHostTest, ActiveReportersCanRemoveJoiningScaleOutTarget)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeSnapshot({ cluster::MemberState::ACTIVE, cluster::MemberState::ACTIVE,
@@ -822,7 +1394,7 @@ TEST_F(TopologyControlHostTest, ActiveReportersCanRemoveJoiningScaleOutTarget)
         host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
     }
 
-    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now());
+    const auto candidates = host_->GetIsolationCandidates("blue", *snapshot, memberships);
 
     ASSERT_EQ(candidates.size(), 1U);
     EXPECT_EQ(candidates.front().address, target.address);
@@ -850,7 +1422,6 @@ TEST_F(TopologyControlHostTest, ReservesOneSlotPerClusterAndReleasesFailedReserv
 TEST_F(TopologyControlHostTest, ReleasingClusterDiscardsFailureEvidence)
 {
     auto options = MakeOptions();
-    options.activeFailureWindow = std::chrono::seconds(3);
     host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, options);
     TopologyControlHostTestPeer::AddRunningEntry(*host_, "blue");
     auto snapshot = MakeActiveSnapshot(6);
@@ -859,11 +1430,11 @@ TEST_F(TopologyControlHostTest, ReleasingClusterDiscardsFailureEvidence)
     for (size_t index = 0; index + 1 < memberships.size(); ++index) {
         host_->RecordWorkerFailureSummaries("blue", memberships[index], { target });
     }
-    ASSERT_EQ(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).size(), 1U);
+    ASSERT_EQ(host_->GetIsolationCandidates("blue", *snapshot, memberships).size(), 1U);
 
     TopologyControlHostTestPeer::ReleaseCluster(*host_, "blue");
 
-    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships, clock_->Now()).empty());
+    EXPECT_TRUE(host_->GetIsolationCandidates("blue", *snapshot, memberships).empty());
 }
 
 TEST_F(TopologyControlHostTest, DelayedSummaryCannotRecreateReleasedClusterEvidence)

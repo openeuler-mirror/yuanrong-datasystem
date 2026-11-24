@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <iterator>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -35,6 +36,13 @@ namespace client {
 namespace {
 constexpr size_t DEFAULT_FILTER_COUNT = 2;
 constexpr size_t MAX_ROUTING_TOKENS = 640'000;
+
+HostPort SampleUniform(const std::vector<HostPort> &candidates)
+{
+    static thread_local std::mt19937 rng{ std::random_device{}() };
+    std::uniform_int_distribution<size_t> dist(0, candidates.size() - 1);
+    return candidates[dist(rng)];
+}
 }  // namespace
 
 WorkerRouter::WorkerRouter(std::string myHostId, std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters,
@@ -251,7 +259,8 @@ Status WorkerRouter::SelectWorkerFromCandidates(const std::vector<HostPort> &can
 Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy,
                                           WorkerAccessAction action, HostPort &worker,
                                           const std::vector<HostPort> &exclude,
-                                          const std::shared_ptr<const RingView> &view) const
+                                          const std::shared_ptr<const RingView> &view,
+                                          const std::vector<HostPort> *spreadCandidates) const
 {
     const auto &idx = view->tokenIndex;
     uint32_t keyHash = MurmurHash3_32(key);
@@ -285,6 +294,30 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementP
         [](const std::pair<uint32_t, int> &token, uint32_t val) { return token.first < val; });
     int start = (iter == idx->tokenToWorker.end()) ? 0 : static_cast<int>(iter - idx->tokenToWorker.begin());
 
+    if (exclude.empty()) {
+        return SelectFirstAvailableFromRing(idx, start, action, exclude, worker);
+    }
+    // Owner-first failover: a key whose ring owner is still routable keeps its deterministic
+    // placement; only keys pushed away from an excluded or unavailable owner fan out randomly.
+    const HostPort &owner = idx->workers[idx->tokenToWorker[start].second];
+    if (!IsExcluded(owner, exclude) && IsWorkerAvailable(owner, action)) {
+        worker = owner;
+        return Status::OK();
+    }
+    if (spreadCandidates != nullptr) {
+        if (spreadCandidates->empty()) {
+            return Status(K_NO_AVAILABLE_WORKER, "All workers filtered or excluded");
+        }
+        worker = SampleUniform(*spreadCandidates);
+        return Status::OK();
+    }
+    return SelectSpreadFromRing(idx, action, exclude, worker);
+}
+
+Status WorkerRouter::SelectFirstAvailableFromRing(const std::shared_ptr<const TokenIndex> &idx, int start,
+                                                  WorkerAccessAction action, const std::vector<HostPort> &exclude,
+                                                  HostPort &worker) const
+{
     int total = static_cast<int>(idx->tokenToWorker.size());
     for (int i = 0; i < total; ++i) {
         int slot = (start + i) % total;
@@ -298,8 +331,37 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementP
             return Status::OK();
         }
     }
-
     return Status(K_NO_AVAILABLE_WORKER, "All workers filtered or excluded");
+}
+
+std::vector<HostPort> WorkerRouter::CollectSpreadCandidates(const std::shared_ptr<const TokenIndex> &idx,
+                                                            WorkerAccessAction action,
+                                                            const std::vector<HostPort> &exclude) const
+{
+    std::vector<HostPort> candidates;
+    candidates.reserve(idx->workers.size());
+    for (const auto &candidate : idx->workers) {
+        if (IsExcluded(candidate, exclude) || !IsWorkerAvailable(candidate, action)) {
+            continue;
+        }
+        candidates.push_back(candidate);
+    }
+    return candidates;
+}
+
+Status WorkerRouter::SelectSpreadFromRing(const std::shared_ptr<const TokenIndex> &idx,
+                                          WorkerAccessAction action, const std::vector<HostPort> &exclude,
+                                          HostPort &worker) const
+{
+    // Failover spread contract: when the caller excludes workers (e.g. retrying away a dead
+    // owner), every currently available candidate must be equally likely so independent
+    // retries fan out across survivors instead of stampeding the deterministic ring successor.
+    auto candidates = CollectSpreadCandidates(idx, action, exclude);
+    if (candidates.empty()) {
+        return Status(K_NO_AVAILABLE_WORKER, "All workers filtered or excluded");
+    }
+    worker = SampleUniform(candidates);
+    return Status::OK();
 }
 
 Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
@@ -312,16 +374,55 @@ Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, DataPla
         groups.clear();
         return Status::OK();
     }
+    // The failover candidate set does not depend on the key, so collect it once per batch and
+    // sample per key instead of rescanning every token for every key.
+    std::vector<HostPort> spreadCandidates;
+    if (!exclude.empty()) {
+        spreadCandidates = CollectSpreadCandidates(view->tokenIndex, action, exclude);
+    }
+    const std::vector<HostPort> *spreadPtr = exclude.empty() ? nullptr : &spreadCandidates;
     std::unordered_map<HostPort, std::vector<std::string>> newGroups;
     for (const auto &key : keys) {
         HostPort owner;
-        Status s = SelectWorkerFromView(key, policy, action, owner, exclude, view);
+        Status s = SelectWorkerFromView(key, policy, action, owner, exclude, view, spreadPtr);
         if (s.IsError()) {
             return s;
         }
         newGroups[owner].push_back(key);
     }
     groups = std::move(newGroups);
+    return Status::OK();
+}
+
+Status WorkerRouter::SelectFailoverWorker(DataPlacementPolicy policy, WorkerAccessAction action, HostPort &worker,
+                                          const std::vector<HostPort> &exclude) const
+{
+    CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), K_NOT_READY, "Routing is not initialized");
+    auto view = std::atomic_load(&ringView_);
+    if (view->tokenIndex->tokenToWorker.empty()) {
+        return Status(K_NOT_FOUND, "Hash ring is empty, no routable workers");
+    }
+    auto candidates = CollectSpreadCandidates(view->tokenIndex, action, exclude);
+    if (candidates.empty()) {
+        return Status(K_NO_AVAILABLE_WORKER, "All workers filtered or excluded");
+    }
+    if (policy != DataPlacementPolicy::PREFERRED_META_OWNER) {
+        const auto &sameNodeWorkers = *view->sameNodeWorkers;
+        std::vector<HostPort> sameNodeCandidates;
+        for (const auto &candidate : candidates) {
+            if (std::find(sameNodeWorkers.begin(), sameNodeWorkers.end(), candidate) != sameNodeWorkers.end()) {
+                sameNodeCandidates.push_back(candidate);
+            }
+        }
+        if (!sameNodeCandidates.empty()) {
+            worker = SampleUniform(sameNodeCandidates);
+            return Status::OK();
+        }
+        if (policy == DataPlacementPolicy::REQUIRED_SAME_NODE) {
+            return Status(K_NO_AVAILABLE_WORKER, "No same-node worker is available");
+        }
+    }
+    worker = SampleUniform(candidates);
     return Status::OK();
 }
 

@@ -331,6 +331,15 @@ Status ExternalCluster::KillWorker(uint32_t idx)
     return Status(K_NOT_FOUND, "worker process is not alive.");
 }
 
+Status ExternalCluster::StopWorker(uint32_t idx)
+{
+    auto workerProcess = workerProcesses_[idx].get();
+    if (workerProcess->IsProcessAlive()) {
+        return workerProcess->Kill(SIGSTOP);
+    }
+    return Status(K_NOT_FOUND, "worker process is not alive.");
+}
+
 Status ExternalCluster::QuicklyShutdownWorker(uint32_t idx)
 {
     Status rc = Status::OK();

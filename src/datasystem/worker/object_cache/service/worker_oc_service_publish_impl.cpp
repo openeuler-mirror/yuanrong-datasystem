@@ -337,8 +337,8 @@ bool WorkerOcServicePublishImpl::EnqueueMetadataOwnerProbe(const HostPort &owner
     const bool shouldScheduleDrain = !metadataOwnerProbeDrainScheduled_;
     try {
         metadataOwnerProbesPending_.insert(ownerAddress);
-        metadataOwnerProbeQueue_.push_back(
-            { owner, objectKey, workerMasterApiManager_, metadataRpcObserver_, localAddress_.ToString() });
+        metadataOwnerProbeQueue_.push_back({ owner, objectKey, workerMasterApiManager_, metadataRpcObserver_,
+                                             metadataRpcMemberIdResolver_, localAddress_.ToString() });
         if (shouldScheduleDrain) {
             metadataOwnerProbeDrainScheduled_ = true;
             metadataOwnerProbeThreadPool_.Execute([this]() noexcept { DrainMetadataOwnerProbes(); });
@@ -385,6 +385,7 @@ void WorkerOcServicePublishImpl::RunMetadataOwnerProbe(const MetadataOwnerProbe 
 
         std::shared_ptr<WorkerMasterOCApi> api;
         Status status = probe.apiManager->GetWorkerMasterApi(probe.owner, api);
+        const auto memberId = probe.memberIdResolver == nullptr ? std::string{} : probe.memberIdResolver(probe.owner);
         if (status.IsOk()) {
             master::PureQueryMetaReqPb req;
             master::PureQueryMetaRspPb rsp;
@@ -393,7 +394,7 @@ void WorkerOcServicePublishImpl::RunMetadataOwnerProbe(const MetadataOwnerProbe 
             req.add_object_keys(probe.objectKey);
             status = api->PureQueryMeta(req, rsp);
         }
-        probe.observer(probe.owner, status);
+        probe.observer(probe.owner, memberId, status);
     } catch (const std::exception &error) {
         LOG(ERROR) << "Metadata owner probe failed with exception, owner: " << probe.owner.ToString()
                    << ", error: " << error.what();

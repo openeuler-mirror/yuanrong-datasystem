@@ -57,7 +57,8 @@ public:
     MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
                         MetadataManagerHolder *metadataManagerHolder, master::ResourceManager *resourceManager,
                         const cluster::MembershipEndpointView &topologyMembership, std::string localAddress,
-                        std::function<void(const HostPort &, const Status &)> metadataRpcObserver = {});
+                        std::function<void(const HostPort &, const std::string &, const Status &)> metadataRpcObserver,
+                        std::function<std::string(const HostPort &)> metadataRpcMemberIdResolver = {});
 
     /**
      * @brief Deconstruct MasterOCServiceImpl.
@@ -483,7 +484,8 @@ private:
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;
     MetadataManagerHolder *metadataManagerHolder_;
     ResourceManager *resourceManager_;
-    std::function<void(const HostPort &, const Status &)> metadataRpcObserver_;
+    std::function<void(const HostPort &, const std::string &, const Status &)> metadataRpcObserver_;
+    std::function<std::string(const HostPort &)> metadataRpcMemberIdResolver_;
 };
 }  // namespace master
 }  // namespace datasystem

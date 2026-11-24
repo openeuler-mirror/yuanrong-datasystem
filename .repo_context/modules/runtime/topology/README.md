@@ -253,19 +253,66 @@
   when the report arrived must still match when the Coordinator counts it. This lets live ScaleIn sources report an
   unreachable `ACTIVE` migration target without making old serving evidence valid after exit. The same summary can
   remove a `JOINING` target only from the currently active ScaleOut batch through the existing ScaleOut replan; it never
-  converts that target to `FAILED`. Reporter and target incarnation checks, report expiry, self-report rejection, and
-  the existing quorum safety floor remain mandatory. For clusters larger than two Workers, the configured threshold is
+  converts that target to `FAILED`. Reporter and target incarnation checks, self-report rejection, and the existing
+  quorum safety floor remain mandatory. Failure votes no longer expire on a time window: they are removed only by the
+  reporter's empty-summary retraction, membership/incarnation change, or topology generation change, so a retained vote
+  never isolates a live Worker without the direct-probe gate confirming it. Pruning by a membership view compares the
+  view's table revision with each reporter's accepted renewal revision: a view older than a reporter's renewal can
+  neither delete that reporter's version baseline nor drop its votes, so candidacy stays continuous until a newer view
+  recomputes. For clusters larger than two Workers, the
+  configured threshold is
   capped by the reporters that remain lifecycle-eligible after excluding the target, but never below two reporters.
   This allows two simultaneous failures in a four-Worker cluster to be confirmed by both survivors without admitting a
   single-reporter isolation. `PRE_LEAVING` members cannot report, but remain in the ScaleIn quorum
   population so partial batch progress cannot lower the isolation threshold. Coordinator bookkeeping maintains both
   target-to-reporter evidence and a reporter-to-target reverse index; a new summary clears only that reporter's prior
-  targets rather than scanning the whole cluster failure table. Expiry and incarnation pruning update both indexes.
+  targets rather than scanning the whole cluster failure table. Incarnation pruning updates both indexes.
   Summary candidates are direct-probed in address order with a rotating cursor and at most 128 targets per reconcile,
   bounding bthread/RPC fanout while allowing every continuously eligible target to make progress. One candidate sweep
   reuses its snapshot across bounded pages, avoiding repeated full evidence scans; any newly drained event or reconcile
   error invalidates that snapshot before more probes are admitted. Active candidates are re-probed no faster than every
-  750 ms, still require two unreachable results, and retain the 250 ms per-probe deadline.
+  750 ms, still require two unreachable results, and retain the 250 ms per-probe deadline; any reachable result resets
+  the consecutive-unreachable streak, so a retained vote can never confirm isolation of a Worker that answers probes.
+  A reachable probe answer — including an explicit server application error from the deliberately invalid probe event
+  (`SERVER_APP_ERROR`) — also lengthens that target's next-probe delay exponentially (750 ms doubling, 60 s cap) while
+  any unreachable result resets both streak and backoff. The Host tracks a per-target evidence version that advances
+  only when a NEW reporter votes; a version advance re-arms the backoff immediately, so a fresh accusation never waits
+  out the reachable cap. In the two-Worker mutual-accusation state, committing a single confirmed-unreachable side
+  additionally requires the other ACTIVE candidate to have answered reachable in the same probe round; otherwise the
+  confirmation is preserved and the peer's backoff is cleared so the next round probes both sides. Late failure
+  observations are validated inside the recording critical section against the latest published snapshot and are
+  serialized with the publication path's removal cleanup on the same mutex, so an in-flight RPC completing after member
+  removal cannot recreate discarded evidence. Summary heartbeats carry a monotonic version per reporter: empty
+  summaries also record the version baseline, a lower version within the same membership incarnation is rejected, and
+  a heartbeat from an incarnation older than the newest one already applied for that address is rejected outright.
+  Worker-side reporter qualification accumulates evidence across sparse gaps: the failure count and
+  first-failure epoch are never reset by silence, qualification needs count >= 3 with a span covering
+  the fixed window (`node_timeout_s/2`), qualification itself rolls the accumulation window and advances a
+  monotonic per-target evidence generation (a delivered keepalive acknowledgement no longer resets anything)
+  while the `reported` state stays sticky (every later keepalive keeps re-asserting
+  the target), and entries have no time-based expiry — only a successful peer RPC or a membership
+  change removes them. The record path and the keepalive summary read path share one locked
+  qualification helper: a batch matured only by keepalive time re-qualifies even an already
+  reported entry, and the fresh generation rides the summary that read is building (no extra wake).
+  The evidence generation travels in the keepalive (index-aligned with the reported targets; absent or zero
+  from older Workers), and the Coordinator records the accepted generation per reporter-to-target pair: the
+  aggregate evidence version advances on a new reporter OR a generation advance, so a repeated accusation
+  wave from the same reporter re-arms a backed-off probe while a sticky re-assertion does not. Keepalive
+  processing binds the summary to the membership value the store renewal actually accepted: the store returns
+  the renewed value and modification revision under its own lock, so a paused handler from a replaced
+  incarnation can neither overwrite nor retract the replacement's votes. The summary fence is the pair
+  (`membershipModRevision`, `summaryVersion`): an older revision is rejected outright, the same revision
+  compares versions, and a newer revision rebases; the first empty summary still records the baseline. The
+  evidence-version table is pruned whenever target evidence dies (retraction, incarnation prune, cluster
+  cleanup) and advances through a cluster-scoped monotonic sequence that deletions never reset; the provider
+  is consulted only for the current candidates. Peer-failure evidence is bound to the target member identity
+  captured before each metadata RPC: the engine compares the initiated identity with the current member inside
+  the recording critical section, entries remember their member id, success clearing and publication cleanup
+  are identity-scoped (an old incarnation's late success cannot clear a new incarnation's failures, and cleanup
+  passes the old id so only matching entries are removed), and an address reused by a new incarnation starts a
+  fresh evidence lineage. Delete-path metadata observations consume an attempt slot written only by real RPCs:
+  a request-budget refusal observes nothing, and a terminal local deadline after answered RPCs observes the
+  real transport successes instead of a synthetic peer failure.
   Coordinator collective probe progress is additionally bound to the current nonzero Raft leader term; loss of control
   authority or a term change discards accumulated samples before any further probe or replacement attempt. Each
   Coordinator-to-Worker control probe and the final collective replacement commit use that expected term under the

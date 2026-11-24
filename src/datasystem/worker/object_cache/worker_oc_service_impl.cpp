@@ -515,26 +515,42 @@ void RecordMultiPublishTransportMetrics(const MultiPublishReqPb &req, uint64_t p
     METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_URMA_TOTAL_BYTES, urmaBytes);
 }
 
-void ObserveMetadataRpcOnTopology(cluster::TopologyEngine *topologyEngine, const HostPort &target, const Status &status)
+void ObserveMetadataRpcOnTopology(cluster::TopologyEngine *topologyEngine, const HostPort &target,
+                                  const std::string &initiatedMemberId, const Status &status)
 {
     if (topologyEngine == nullptr) {
         return;
     }
-    topologyEngine->ObservePeerRpcResult(target, status);
+    topologyEngine->ObservePeerRpcResult(target, initiatedMemberId, status);
 }
 
-std::function<void(const HostPort &, const Status &)> BuildMetadataRpcObserver(
+std::function<void(const HostPort &, const std::string &, const Status &)> BuildMetadataRpcObserver(
     cluster::TopologyEngine *topologyEngine, const std::atomic<bool> *exitRequested,
     const std::shared_ptr<std::atomic_bool> &observerAlive)
 {
     return [topologyEngine, exitRequested, observerAlive = std::weak_ptr<std::atomic_bool>(observerAlive)](
-               const HostPort &target, const Status &status) {
+               const HostPort &target, const std::string &initiatedMemberId, const Status &status) {
         auto alive = observerAlive.lock();
         if (alive == nullptr || !alive->load(std::memory_order_acquire)
             || (exitRequested != nullptr && exitRequested->load(std::memory_order_acquire))) {
             return;
         }
-        ObserveMetadataRpcOnTopology(topologyEngine, target, status);
+        ObserveMetadataRpcOnTopology(topologyEngine, target, initiatedMemberId, status);
+    };
+}
+
+std::function<std::string(const HostPort &)> BuildMetadataRpcMemberIdResolver(
+    cluster::TopologyEngine *topologyEngine, const std::atomic<bool> *exitRequested,
+    const std::shared_ptr<std::atomic_bool> &observerAlive)
+{
+    return [topologyEngine, exitRequested, observerAlive = std::weak_ptr<std::atomic_bool>(observerAlive)](
+               const HostPort &target) -> std::string {
+        auto alive = observerAlive.lock();
+        if (alive == nullptr || !alive->load(std::memory_order_acquire)
+            || (exitRequested != nullptr && exitRequested->load(std::memory_order_acquire))) {
+            return {};
+        }
+        return topologyEngine == nullptr ? std::string{} : topologyEngine->ResolveMemberId(target);
     };
 }
 
@@ -651,9 +667,10 @@ Status WorkerOCServiceImpl::InitL2Cache()
     return Status::OK();
 }
 
-void WorkerOCServiceImpl::ObserveMetadataRpc(const HostPort &target, const Status &status)
+void WorkerOCServiceImpl::ObserveMetadataRpc(const HostPort &target, const std::string &initiatedMemberId,
+                                             const Status &status)
 {
-    ObserveMetadataRpcOnTopology(topologyEngine_, target, status);
+    ObserveMetadataRpcOnTopology(topologyEngine_, target, initiatedMemberId, status);
 }
 
 void WorkerOCServiceImpl::InitServiceImpl()
@@ -675,6 +692,8 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .exitRequested = exitRequested_,
         .ubAdmission = ubAdmission_.get(),
         .metadataRpcObserver = BuildMetadataRpcObserver(topologyEngine_, exitRequested_, metadataRpcObserverAlive_),
+        .metadataRpcMemberIdResolver =
+            BuildMetadataRpcMemberIdResolver(topologyEngine_, exitRequested_, metadataRpcObserverAlive_),
         .allowDirectoryLag = false,
         .metadataRpcFailureReported = BuildMetadataRpcFailureReported(topologyEngine_),
     };
@@ -3718,7 +3737,15 @@ Status WorkerOCServiceImpl::DeleteDevObjects(const DeleteAllCopyReqPb &req, Dele
     reqCopy.set_are_device_objects(true);
     *reqCopy.mutable_object_keys() = { req.object_keys().begin(), req.object_keys().end() };
     PerfPoint point(PerfKey::WORKER_DELETE_OBJECT_TO_MASTER);
-    auto rc = workerMasterApi->DeleteAllCopyMeta(reqCopy, respFromMaster);
+    HostPort masterTarget;
+    const bool targetParsed = masterTarget.ParseString(workerMasterApi->GetHostPort()).IsOk();
+    const std::string initiatedMemberId = targetParsed ? topologyEngine_->ResolveMemberId(masterTarget)
+                                                       : std::string{};
+    RpcAttemptObservation attempt;
+    auto rc = workerMasterApi->DeleteAllCopyMeta(reqCopy, respFromMaster, &attempt);
+    if (attempt.dispatched && targetParsed) {
+        ObserveMetadataRpc(masterTarget, initiatedMemberId, attempt.lastAttemptStatus);
+    }
     *resp.mutable_fail_object_keys() = { respFromMaster.failed_object_keys().begin(),
                                          respFromMaster.failed_object_keys().end() };
     resp.mutable_last_rc()->set_error_code(respFromMaster.last_rc().error_code());

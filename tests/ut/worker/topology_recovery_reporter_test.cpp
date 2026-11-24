@@ -98,7 +98,8 @@ public:
     }
 
     Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *, const std::string &, int64_t,
-                     const std::vector<std::string> & = {}) override
+                     const std::vector<std::string> & = {}, uint64_t = 0,
+                     const std::vector<uint64_t> & = {}) override
     {
         return Unused("KeepAlive");
     }

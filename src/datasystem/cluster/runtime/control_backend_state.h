@@ -39,7 +39,8 @@ enum class ControlBackendProbeOutcome : uint8_t {
     DEADLINE_EXCEEDED,
     UNAVAILABLE,
     CANCELLED,
-    ERROR
+    ERROR,
+    SERVER_APP_ERROR
 };
 
 /**

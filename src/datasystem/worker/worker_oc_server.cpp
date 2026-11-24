@@ -888,13 +888,18 @@ void WorkerOCServer::CreateMasterServices()
     commonSvc_ = std::make_unique<MasterServiceImpl>(hostPort_);
     resourceManager_->SetTopologyMembership(&topologyEngine_->Membership());
     auto metadataRpcObserver = [topologyEngine = topologyEngine_.get()](const HostPort &target,
+                                                                       const std::string &initiatedMemberId,
                                                                        const Status &status) {
-        topologyEngine->ObservePeerRpcResult(target, status);
+        topologyEngine->ObservePeerRpcResult(target, initiatedMemberId, status);
+    };
+    auto metadataRpcMemberIdResolver = [topologyEngine = topologyEngine_.get()](const HostPort &target) {
+        return topologyEngine->ResolveMemberId(target);
     };
     objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_,
                                                                metadataManagerHolder_.get(), resourceManager_.get(),
                                                                topologyEngine_->Membership(), hostPort_.ToString(),
-                                                               std::move(metadataRpcObserver));
+                                                               std::move(metadataRpcObserver),
+                                                               std::move(metadataRpcMemberIdResolver));
     streamServices_->CreateMasterServices(hostPort_, akSkManager_, metadataManagerHolder_.get(),
                                           topologyEngine_->Membership(), topologyEngine_->IsRestart());
 }

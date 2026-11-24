@@ -49,4 +49,14 @@ int RpcOptions::GetHWM() const
 {
     return hwm_;
 }
+
+void RpcOptions::SetAttemptStatusCapture(Status *capture)
+{
+    attemptStatusCapture_ = capture;
+}
+
+Status *RpcOptions::GetAttemptStatusCapture() const
+{
+    return attemptStatusCapture_;
+}
 }  // namespace datasystem

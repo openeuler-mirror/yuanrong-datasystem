@@ -266,13 +266,25 @@ public:
     std::string ResolveKeepAliveHostId() const;
     Status CreateKeepAliveKeyWithRetry();
 
+    /**
+     * @brief Renew the current membership lease once and deliver the pending failure summary.
+     * @return Status of the call. Public for tests that stop the renewal thread and drive
+     *         deterministic delivery cycles by hand.
+     */
+    Status RenewKeepAliveOnce();
+
     void RecordPeerRpcFailure(const HostPort &target) override;
+    void RecordPeerRpcFailure(const HostPort &target, const std::string &initiatedMemberId,
+                               const std::function<bool()> &isMemberPresent) override;
     void RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now);
-    void RecordPeerRpcSuccess(const HostPort &target) override;
+    void RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now,
+                              const std::string &initiatedMemberId, const std::function<bool()> &isMemberPresent);
+    void RecordPeerRpcSuccess(const HostPort &target, const std::string &expectedMemberId = {}) override;
     bool IsPeerRpcFailureReported(const HostPort &target) const override;
     void ClearPeerRpcFailureObservations() override;
-    void DiscardPeerRpcFailure(const HostPort &target) override;
-    std::vector<std::string> GetFailedTargets(std::chrono::steady_clock::time_point now);
+    void DiscardPeerRpcFailure(const HostPort &target, const std::string &expectedMemberId = {}) override;
+    std::vector<std::string> GetFailedTargets(std::chrono::steady_clock::time_point now,
+                                             std::vector<uint64_t> *generations = nullptr);
     bool ConsumeImmediateReportSignal();
     void WakeKeepAliveForFailureSummary();
 
@@ -429,12 +441,23 @@ private:
     };
     struct RpcFailedState {
         uint64_t failedCount{ 0 };
-        std::chrono::steady_clock::time_point firstFailedAt;
-        std::chrono::steady_clock::time_point lastFailedAt;
+        std::chrono::steady_clock::time_point firstFailedAt{};
+        std::chrono::steady_clock::time_point lastFailedAt{};
         bool reported{ false };
+        // Advances once per qualification window so the Coordinator can distinguish a fresh
+        // accusation wave from a sticky re-assertion of the same evidence. Assigned from the
+        // worker-lifetime monotonic source, so it survives entry erasure across batches.
+        uint64_t evidenceGeneration{ 0 };
+        // Member id this evidence belongs to; empty entries are un-attributed legacy state that
+        // any scoped cleanup may still clear.
+        std::string memberId;
     };
 
-    void ClearPeerRpcFailure(const HostPort &target, const char *action);
+    void ClearPeerRpcFailure(const HostPort &target, const char *action, const std::string *expectedMemberId = nullptr);
+    void LogPeerRpcFailureObserved(const std::string &targetAddress, bool shouldWake, uint64_t failedCount,
+                                   int64_t failedMs, uint64_t evidenceGeneration);
+    bool QualifyForReportingLocked(RpcFailedState &state, std::chrono::steady_clock::time_point now,
+                                   std::chrono::milliseconds failureWindow);
 
     /**
      * @brief Strip a physical table prefix from one returned key.
@@ -466,12 +489,6 @@ private:
 
     Status CommitCreatedMembership(const MembershipIncarnation &startedFrom, const std::string &coordinatorId,
                                    int64_t revision, const MembershipValue &publishedValue, bool recreated);
-
-    /**
-     * @brief Renew the current membership lease once.
-     * @return Status of the call.
-     */
-    Status RenewKeepAliveOnce();
 
     Status PrepareNodeStateMutation(MemberLifecycleState state, int32_t timeoutMs, MembershipMutation &mutation);
 
@@ -681,6 +698,10 @@ private:
 
     mutable std::mutex rpcFailedMutex_;
     std::unordered_map<std::string, RpcFailedState> rpcFailedStates_;
+    // Worker-lifetime monotonic source under rpcFailedMutex_: entry erasure (success/incarnation
+    // cleanup) must not reset it, otherwise the next qualified batch re-sends the same generation
+    // and the Coordinator cannot distinguish a new accusation wave from a sticky re-assertion.
+    uint64_t evidenceGenerationSource_{ 0 };
     std::atomic<bool> hasRpcFailures_{ false };
     bool immediateReportSignal_{ false };
 
@@ -709,6 +730,9 @@ private:
     std::atomic<bool> keepAliveTimeout_{ false };
     // Monotonic publication fact; unlike keepAliveValue_, it does not regress when lifecycle advances to READY.
     std::atomic<bool> firstKeepAliveSent_{ false };
+    // Monotonic per-worker heartbeat summary version; lets the coordinator reject a stale heartbeat
+    // whose resurrected handler would otherwise install an outdated failure-target summary.
+    std::atomic<uint64_t> keepAliveSummaryVersion_{ 0 };
     static constexpr size_t MAX_MEMBERSHIP_MUTATION_ATTEMPTS = 2;
     static constexpr int64_t MS_PER_SECOND = 1'000;
     int64_t keepAliveTtlMs_{ 0 };

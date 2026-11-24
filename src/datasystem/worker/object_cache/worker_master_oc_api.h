@@ -41,6 +41,17 @@ class MasterOCServiceImpl;
 namespace worker {
 
 /**
+ * @brief Transport-level observation of one master RPC's actual attempt.
+ *
+ * Stays untouched when the request budget rejects the call before any dispatch, so observers can
+ * distinguish "never sent" (local deadline, not peer evidence) from a real transport result.
+ */
+struct RpcAttemptObservation {
+    bool dispatched{ false };
+    Status lastAttemptStatus;
+};
+
+/**
  * @brief The WorkerMasterOCApi is an abstract class that defines the interface for interactions with the object cache
  * master service.
  */
@@ -161,7 +172,8 @@ public:
      * @return Status of the call.
      */
     virtual Status DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request,
-                                     master::DeleteAllCopyMetaRspPb &response) = 0;
+                                     master::DeleteAllCopyMetaRspPb &response,
+                                     RpcAttemptObservation *attempt = nullptr) = 0;
 
     /**
      * @brief Send request to master to decrease the global reference count.
@@ -426,7 +438,8 @@ public:
     Status GDecNestedRef(master::GDecNestedRefReqPb &request, master::GDecNestedRefRspPb &response) override;
     Status UpdateMeta(master::UpdateMetaReqPb &request, master::UpdateMetaRspPb &response) override;
     Status DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request,
-                             master::DeleteAllCopyMetaRspPb &response) override;
+                             master::DeleteAllCopyMetaRspPb &response,
+                             RpcAttemptObservation *attempt = nullptr) override;
     Status GDecreaseMasterRef(const std::vector<std::string> &finishDecIds, std::unordered_set<std::string> &unAliveIds,
                               std::vector<std::string> &failDecIds, const std::string &remoteClientId = "") override;
     Status ReleaseGRefs(master::ReleaseGRefsReqPb &request, master::ReleaseGRefsRspPb &response) override;
@@ -520,7 +533,8 @@ public:
     Status GDecNestedRef(master::GDecNestedRefReqPb &request, master::GDecNestedRefRspPb &response) override;
     Status UpdateMeta(master::UpdateMetaReqPb &request, master::UpdateMetaRspPb &response) override;
     Status DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request,
-                             master::DeleteAllCopyMetaRspPb &response) override;
+                             master::DeleteAllCopyMetaRspPb &response,
+                             RpcAttemptObservation *attempt = nullptr) override;
     Status GDecreaseMasterRef(const std::vector<std::string> &finishDecIds, std::unordered_set<std::string> &unAliveIds,
                               std::vector<std::string> &failDecIds, const std::string &remoteClientId = "") override;
     Status ReleaseGRefs(master::ReleaseGRefsReqPb &request, master::ReleaseGRefsRspPb &response) override;

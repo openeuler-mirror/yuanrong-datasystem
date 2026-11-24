@@ -16,6 +16,9 @@
  */
 
 #include <algorithm>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include <atomic>
 #include <chrono>
@@ -51,14 +54,20 @@
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/rpc/rpc_server.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/client/object_cache/transport/object_read/object_read_types.h"
 #include "datasystem/protos/master_object.pb.h"
+#include "datasystem/protos/master_object.brpc.pb.h"
+#include "datasystem/protos/master_object.irpc.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
@@ -75,6 +84,7 @@
 #include "ut/common.h"
 #define private public
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
+#include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
 #include "datasystem/worker/object_cache/worker_oc_constants.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
@@ -194,6 +204,8 @@ public:
     using CreateMetaHandler = std::function<Status(master::CreateMetaReqPb &, master::CreateMetaRspPb &)>;
     using QueryMetaHandler = std::function<Status(int, master::QueryMetaRspPb &)>;
     using RemoveMetaHandler = std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)>;
+    using DeleteAllCopyMetaHandler =
+        std::function<Status(master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &)>;
     using PushMetaHandler =
         std::function<Status(master::PushMetaToMasterReqPb &, master::PushMetaToMasterRspPb &)>;
     using CheckLocationHandler =
@@ -277,6 +289,25 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         ++createMetaCallCount_;
         return createMetaHandler_ == nullptr ? Status::OK() : createMetaHandler_(req, rsp);
+    }
+
+    Status DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &req, master::DeleteAllCopyMetaRspPb &rsp,
+                              worker::RpcAttemptObservation *attempt = nullptr) override
+    {
+        auto rc = Status::OK();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++deleteAllCopyMetaCallCount_;
+            if (deleteAllCopyMetaHandler_ != nullptr) {
+                rc = deleteAllCopyMetaHandler_(req, rsp);
+            }
+        }
+        // Mirror the production contract: the slot records only actually attempted calls.
+        if (attempt != nullptr) {
+            attempt->dispatched = true;
+            attempt->lastAttemptStatus = rc;
+        }
+        return rc;
     }
 
     Status QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout, master::QueryMetaRspPb &response,
@@ -444,9 +475,23 @@ public:
         removeMetaHandler_ = std::move(handler);
     }
 
+    void SetDeleteAllCopyMetaHandler(DeleteAllCopyMetaHandler handler)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        deleteAllCopyMetaHandler_ = std::move(handler);
+    }
+
+    int DeleteAllCopyMetaCallCount() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return deleteAllCopyMetaCallCount_;
+    }
+
     PushMetaHandler pushMetaHandler_;
     bool acknowledgeRecoveryErrors_{ true };
     CheckLocationHandler checkLocationHandler_;
+    DeleteAllCopyMetaHandler deleteAllCopyMetaHandler_;
+    int deleteAllCopyMetaCallCount_{ 0 };
 
     int CreateMetaCallCount() const
     {
@@ -865,6 +910,110 @@ private:
     size_t payloadSendCount_{ 0 };
     Status writeStatus_;
 };
+
+int GetFreeTcpPort()
+{
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return 0;
+    }
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (bind(sock, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
+        close(sock);
+        return 0;
+    }
+    socklen_t len = sizeof(addr);
+    if (getsockname(sock, reinterpret_cast<struct sockaddr *>(&addr), &len) < 0) {
+        close(sock);
+        return 0;
+    }
+    close(sock);
+    return ntohs(addr.sin_port);
+}
+
+#define FAKE_MASTER_SERVICE_METHOD(method, ...) \
+    Status method(__VA_ARGS__) override          \
+    {                                            \
+        return Status(K_RUNTIME_ERROR, "fake master service method not used by this test"); \
+    }
+
+class FakeMasterOCServiceForDeadlineTest : public master::IMasterOCService {
+public:
+    Status DeleteAllCopyMeta(
+        std::shared_ptr<ServerUnaryWriterReader<master::DeleteAllCopyMetaRspPb, master::DeleteAllCopyMetaReqPb>>
+            serverApi) override
+    {
+        master::DeleteAllCopyMetaReqPb req;
+        RETURN_IF_NOT_OK(serverApi->Read(req));
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++callCount_;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        master::DeleteAllCopyMetaRspPb rsp;
+        return serverApi->Write(rsp);
+    }
+
+    size_t CallCount()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return callCount_;
+    }
+
+    FAKE_MASTER_SERVICE_METHOD(CreateMeta, const master::CreateMetaReqPb &, master::CreateMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(CreateCopyMeta, const master::CreateCopyMetaReqPb &, master::CreateCopyMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(CreateMultiCopyMeta, const master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(QueryMeta, const master::QueryMetaReqPb &, master::QueryMetaRspPb &, std::vector<RpcMessage> &)
+    FAKE_MASTER_SERVICE_METHOD(RemoveMeta, const master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(UpdateMeta, const master::UpdateMetaReqPb &, master::UpdateMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GetObjectLocations, const master::GetObjectLocationsReqPb &, master::GetObjectLocationsRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GIncreaseRef, const master::GIncreaseReqPb &, master::GIncreaseRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GDecreaseRef, std::shared_ptr<ServerUnaryWriterReader<master::GDecreaseRspPb, master::GDecreaseReqPb>>)
+    FAKE_MASTER_SERVICE_METHOD(QueryGlobalRefNum, const QueryGlobalRefNumReqPb &, QueryGlobalRefNumRspCollectionPb &)
+    FAKE_MASTER_SERVICE_METHOD(IncrSeqNoMeta, const master::IncrSeqNoMetaReqPb &, master::IncrSeqNoMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GetSeqNoMeta, const master::GetSeqNoMetaReqPb &, master::GetSeqNoMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(DelSeqNoMeta, const master::DelSeqNoMetaReqPb &, master::DelSeqNoMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(PushMetaToMaster, const master::PushMetaToMasterReqPb &, master::PushMetaToMasterRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GIncNestedRef, const master::GIncNestedRefReqPb &, master::GIncNestedRefRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GDecNestedRef, const master::GDecNestedRefReqPb &, master::GDecNestedRefRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(ReconcileMembershipChange, std::shared_ptr<ServerUnaryWriterReader<master::ReconciliationRspPb, master::ReconciliationQueryPb>>)
+    FAKE_MASTER_SERVICE_METHOD(MigrateMetadata, const master::MigrateMetadataReqPb &, master::MigrateMetadataRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GIncreaseMasterAppRef, const master::GIncreaseReqPb &, master::GIncreaseRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(ReleaseGRefs, const master::ReleaseGRefsReqPb &, master::ReleaseGRefsRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(ReleaseGRefsOfRemoteClientId, const master::ReleaseGRefsReqPb &, master::ReleaseGRefsRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(CreateMultiMeta, const master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(ReportResource, const master::ResourceReportReqPb &, master::ResourceReportRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(ReportRebalanceResult, const master::ReportRebalanceResultReqPb &, master::ReportRebalanceResultRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(StartEvictionPolicyUpdate, const master::StartEvictionPolicyUpdateReqPb &, master::StartEvictionPolicyUpdateRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GetEvictionPolicyUpdateProgress, const master::GetEvictionPolicyUpdateProgressReqPb &, master::GetEvictionPolicyUpdateProgressRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(LivenessCheck, const master::LivenessCheckReqPb &, master::LivenessCheckRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(PutP2PMeta, const PutP2PMetaReqPb &, PutP2PMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(SubscribeReceiveEvent, std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb, SubscribeReceiveEventReqPb>>)
+    FAKE_MASTER_SERVICE_METHOD(GetP2PMeta, std::shared_ptr<ServerUnaryWriterReader<GetP2PMetaRspPb, GetP2PMetaReqPb>>)
+    FAKE_MASTER_SERVICE_METHOD(SendRootInfo, const SendRootInfoReqPb &, SendRootInfoRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(RecvRootInfo, std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>>)
+    FAKE_MASTER_SERVICE_METHOD(GetDataInfo, std::shared_ptr<ServerUnaryWriterReader<GetDataInfoRspPb, GetDataInfoReqPb>>)
+    FAKE_MASTER_SERVICE_METHOD(AckRecvFinish, const AckRecvFinishReqPb &, AckRecvFinishRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(RemoveP2PLocation, const RemoveP2PLocationReqPb &, RemoveP2PLocationRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(ReleaseMetaData, const ReleaseMetaDataReqPb &, ReleaseMetaDataRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(ReplacePrimary, const master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(PureQueryMeta, const master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(RollbackMultiMeta, const master::RollbackMultiMetaReqPb &, master::RollbackMultiMetaRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(Expire, const master::ExpireReqPb &, master::ExpireRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(GetMetaInfo, const GetMetaInfoReqPb &, GetMetaInfoRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(CheckObjectDataLocation, const master::CheckObjectDataLocationReqPb &, master::CheckObjectDataLocationRspPb &)
+    FAKE_MASTER_SERVICE_METHOD(BatchExists, const master::BatchExistsReqPb &, master::BatchExistsRspPb &)
+
+private:
+    std::mutex mutex_;
+    size_t callCount_{ 0 };
+};
+
+#undef FAKE_MASTER_SERVICE_METHOD
 }  // namespace
 
 class WorkerOcServiceImplTest : public CommonTest {
@@ -1006,7 +1155,8 @@ public:
     WorkerOcServiceCrudParam MakeCrudParam(std::shared_ptr<WorkerMasterOCApiManager> apiManager = nullptr,
                                            const worker::MetadataRouteResolver *metadataRoute = nullptr,
                                            const ObjectEndpointPolicy *endpointPolicy = nullptr,
-                                           std::function<void(const HostPort &, const Status &)> observer = nullptr,
+                                           std::function<void(const HostPort &, const std::string &, const Status &)>
+                                               observer = nullptr,
                                            std::function<bool(const HostPort &)> failureReported = nullptr)
     {
         return WorkerOcServiceCrudParam{
@@ -2245,7 +2395,7 @@ TEST_F(WorkerOcServiceImplTest, MultiPublishQualifiedMetadataDeadlineRequestsRin
     size_t observedFailures = 0;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         nullptr, nullptr, nullptr,
-        [&observedFailures](const HostPort &, const Status &status) {
+        [&observedFailures](const HostPort &, const std::string &, const Status &status) {
             if (status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
                 ++observedFailures;
             }
@@ -2474,6 +2624,250 @@ TEST_F(WorkerOcServiceImplTest, BatchMetaMovingWithoutRedirectInfoRetries)
 
     EXPECT_EQ(rpcCalls, K_EXPECTED_META_MOVING_RPC_CALLS);
     EXPECT_FALSE(response.meta_is_moving());
+}
+
+TEST_F(WorkerOcServiceImplTest, MetaMovingLocalDeadlineWithoutRpcNeverObservesPeer)
+{
+    // The delete-path observer lives inside the single-RPC lambda: with the request budget
+    // already exhausted the retry helper returns a local deadline before any RPC is sent, so no
+    // peer failure evidence can be recorded for the target.
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(0);
+    master::DeleteAllCopyMetaReqPb request;
+    master::DeleteAllCopyMetaRspPb response;
+    size_t rpcCalls = 0;
+    std::function<Status(master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &)> invoke =
+        [&rpcCalls](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &rsp) {
+            ++rpcCalls;
+            rsp.set_meta_is_moving(false);
+            return Status::OK();
+        };
+
+    const auto rc = WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(request, response, invoke);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(rpcCalls, 0U);
+}
+
+TEST_F(WorkerOcServiceImplTest, MetaMovingLocalDeadlineAfterAnsweredRpcsObservesOnlySuccesses)
+{
+    // Every RPC in the meta-moving loop is fully answered (transport OK), so per-RPC
+    // observation records only successes; the trailing local deadline is not peer failure.
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(20);
+    master::DeleteAllCopyMetaReqPb request;
+    master::DeleteAllCopyMetaRspPb response;
+    size_t rpcCalls = 0;
+    std::function<Status(master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &)> invoke =
+        [&rpcCalls](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &rsp) {
+            ++rpcCalls;
+            rsp.set_meta_is_moving(true);
+            return Status::OK();
+        };
+
+    const auto rc = WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(request, response, invoke);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_GE(rpcCalls, 1U);
+}
+
+TEST_F(WorkerOcServiceImplTest, DeleteEntryZeroRpcBudgetNeverObservesPeer)
+{
+    const HostPort peer("127.0.0.1", 18499);
+    TestDistributedTopology topology(localAddress_, peer);
+    DS_ASSERT_OK(topology.InitStatus());
+    const std::string key = "delete-entry-zero-budget";
+    topology.SetOwner(key, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t rpcCalls = 0;
+    api->SetDeleteAllCopyMetaHandler([&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+        ++rpcCalls;
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    std::vector<std::pair<HostPort, Status>> observations;
+    auto param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy(),
+                               [&observations](const HostPort &target, const std::string &, const Status &status) {
+                                   observations.emplace_back(target, status);
+                               });
+    WorkerOcServiceDeleteImpl deleteImpl(param, nullptr, localAddress_, nullptr);
+
+    ScopedRequestContext context;
+    GetRequestContext()->reqTimeoutDuration.Init(0);
+    std::unordered_set<std::string> failedKeys;
+    const auto rc = deleteImpl.DeleteAllCopyMetaFromMaster({ key }, failedKeys);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(rpcCalls, 0U);
+    EXPECT_TRUE(observations.empty());
+    EXPECT_EQ(failedKeys.count(key), 1U);
+}
+
+TEST_F(WorkerOcServiceImplTest, DeleteEntryMovingLoopUntilDeadlineObservesOnlySuccesses)
+{
+    const HostPort peer("127.0.0.1", 18499);
+    TestDistributedTopology topology(localAddress_, peer);
+    DS_ASSERT_OK(topology.InitStatus());
+    const std::string key = "delete-entry-moving-deadline";
+    topology.SetOwner(key, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t rpcCalls = 0;
+    api->SetDeleteAllCopyMetaHandler([&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &rsp) {
+        ++rpcCalls;
+        rsp.set_meta_is_moving(true);
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    std::vector<std::pair<HostPort, Status>> observations;
+    auto param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy(),
+                               [&observations](const HostPort &target, const std::string &, const Status &status) {
+                                   observations.emplace_back(target, status);
+                               });
+    WorkerOcServiceDeleteImpl deleteImpl(param, nullptr, localAddress_, nullptr);
+
+    ScopedRequestContext context;
+    GetRequestContext()->reqTimeoutDuration.Init(20);
+    std::unordered_set<std::string> failedKeys;
+    const auto rc = deleteImpl.DeleteAllCopyMetaFromMaster({ key }, failedKeys);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    ASSERT_GE(rpcCalls, 1U);
+    ASSERT_EQ(observations.size(), rpcCalls);
+    for (const auto &observation : observations) {
+        EXPECT_EQ(observation.first, localAddress_);
+        EXPECT_TRUE(observation.second.IsOk());
+    }
+}
+
+TEST_F(WorkerOcServiceImplTest, DeleteEntryUnavailableAttemptObservesRealTransportFailure)
+{
+    const HostPort peer("127.0.0.1", 18499);
+    TestDistributedTopology topology(localAddress_, peer);
+    DS_ASSERT_OK(topology.InitStatus());
+    const std::string key = "delete-entry-unavailable";
+    topology.SetOwner(key, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t rpcCalls = 0;
+    api->SetDeleteAllCopyMetaHandler([&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+        ++rpcCalls;
+        return Status(K_RPC_UNAVAILABLE, "peer unreachable");
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    std::vector<std::pair<HostPort, Status>> observations;
+    auto param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy(),
+                               [&observations](const HostPort &target, const std::string &, const Status &status) {
+                                   observations.emplace_back(target, status);
+                               });
+    WorkerOcServiceDeleteImpl deleteImpl(param, nullptr, localAddress_, nullptr);
+
+    ScopedRequestContext context;
+    GetRequestContext()->reqTimeoutDuration.Init(5'000);
+    std::unordered_set<std::string> failedKeys;
+    const auto rc = deleteImpl.DeleteAllCopyMetaFromMaster({ key }, failedKeys);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(rpcCalls, 1U);
+    ASSERT_EQ(observations.size(), 1U);
+    EXPECT_EQ(observations.front().first, localAddress_);
+    EXPECT_EQ(observations.front().second.GetCode(), K_RPC_UNAVAILABLE);
+}
+
+TEST_F(WorkerOcServiceImplTest, DeleteEntryInnerBudgetGateRejectsBeforeTransport)
+{
+    const HostPort peer("127.0.0.1", 18499);
+    TestDistributedTopology topology(localAddress_, peer);
+    DS_ASSERT_OK(topology.InitStatus());
+    const std::string key = "delete-entry-inner-gate";
+    topology.SetOwner(key, localAddress_);
+    // The real remote API is injected so the production CHECK_AND_SET_TIMEOUT gate runs. No Init
+    // is needed: an inner budget rejection never touches the brpc session.
+    auto realApi = std::make_shared<worker::WorkerRemoteMasterOCApi>(localAddress_, localAddress_);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(realApi);
+    std::vector<std::pair<HostPort, Status>> observations;
+    auto param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy(),
+                               [&observations](const HostPort &target, const std::string &, const Status &status) {
+                                   observations.emplace_back(target, status);
+                               });
+    WorkerOcServiceDeleteImpl deleteImpl(param, nullptr, localAddress_, nullptr);
+
+    // The outer retry budget admits one attempt; the injected delay then burns the remaining time
+    // between admission and the inner gate, so the inner CHECK must reject with zero transport.
+    ScopedRequestContext context;
+    GetRequestContext()->reqTimeoutDuration.Init(3);
+    constexpr char injectPoint[] = "rpc_util.retry_on_error_before_func";
+    ASSERT_TRUE(inject::Set(injectPoint, "sleep(20)").IsOk());
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+    std::unordered_set<std::string> failedKeys;
+    const auto rc = deleteImpl.DeleteAllCopyMetaFromMaster({ key }, failedKeys);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    // The inner gate's own message proves the rejection happened at the transport boundary rather
+    // than in the outer retry helper (which reports a bare "Rpc timeout").
+    EXPECT_NE(rc.GetMsg().find("Request timeout"), std::string::npos) << rc.ToString();
+    EXPECT_TRUE(observations.empty());
+}
+
+TEST_F(WorkerOcServiceImplTest, DeleteEntryPostDeadlineSuccessObservesTransportSuccess)
+{
+    const int port = GetFreeTcpPort();
+    ASSERT_GT(port, 0);
+    const HostPort masterAddress("127.0.0.1", port);
+    auto masterService = std::make_unique<FakeMasterOCServiceForDeadlineTest>();
+    auto masterAdapter = std::make_unique<master::MasterOCServiceBrpcAdapter>(*masterService);
+    RpcServer::Builder builder;
+    std::unique_ptr<RpcServer> server;
+    DS_ASSERT_OK(builder.SetBrpcAddr("127.0.0.1", port).Init(server));
+    DS_ASSERT_OK(server->AddBrpcService(masterAdapter.get()));
+    DS_ASSERT_OK(server->StartBrpcServer("127.0.0.1", port));
+    Raii stopServer([&] {
+        server->StopBrpcServer();
+        server.reset();
+        masterAdapter.reset();
+        masterService.reset();
+    });
+
+    const HostPort peer("127.0.0.1", 18499);
+    TestDistributedTopology topology(localAddress_, peer);
+    DS_ASSERT_OK(topology.InitStatus());
+    const std::string key = "delete-entry-post-deadline-success";
+    topology.SetOwner(key, localAddress_);
+    // The unit-test binary never boots a real worker server, so the stub cache must be initialized
+    // before the remote API can resolve its generated stub.
+    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(16, localAddress_));
+    // The real remote API goes through the generated stub, which is the only path that can hit a
+    // successful transport reply followed by a local post-call ApiDeadline miss.
+    auto realApi = std::make_shared<worker::WorkerRemoteMasterOCApi>(masterAddress, localAddress_);
+    DS_ASSERT_OK(realApi->Init());
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(realApi);
+    std::vector<std::pair<HostPort, Status>> observations;
+    auto param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy(),
+                               [&observations](const HostPort &target, const std::string &, const Status &status) {
+                                   observations.emplace_back(target, status);
+                               });
+    WorkerOcServiceDeleteImpl deleteImpl(param, nullptr, localAddress_, nullptr);
+
+    // The request budget admits the RPC, but the per-request ApiDeadline is already gone by the
+    // time the reply lands, so the API must still report a deadline to business code.
+    ScopedRequestContext context;
+    GetRequestContext()->reqTimeoutDuration.Init(100);
+    ApiDeadlineGuard deadlineGuard(1);
+    std::unordered_set<std::string> failedKeys;
+    const auto rc = deleteImpl.DeleteAllCopyMetaFromMaster({ key }, failedKeys);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    ASSERT_GE(masterService->CallCount(), 1U);
+    ASSERT_FALSE(observations.empty());
+    for (const auto &observation : observations) {
+        EXPECT_EQ(observation.first, masterAddress);
+        // The transport attempt succeeded even though the API returned a deadline: the observer
+        // must see the real attempt result, not the post-deadline mapping.
+        EXPECT_TRUE(observation.second.IsOk()) << observation.second.ToString();
+    }
 }
 
 TEST_F(WorkerOcServiceImplTest, PayloadMetaMovingWithoutRedirectInfoRetries)
@@ -3147,7 +3541,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcFailure
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, nullptr, nullptr,
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
@@ -3546,7 +3940,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, nullptr, nullptr,
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
@@ -3575,7 +3969,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterDoesNotReportLocalRetryBu
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, nullptr, nullptr,
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
@@ -3633,7 +4027,7 @@ TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsMapsMetadataRpcFailure
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, nullptr, nullptr,
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
@@ -3669,7 +4063,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysDoesNotReportLocalRetryBudgetT
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, topology.Route(), topology.EndpointPolicy(),
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
@@ -3700,7 +4094,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysMapsOwnerPeerDeadToMetadataOwn
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, topology.Route(), topology.EndpointPolicy(),
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
@@ -3732,7 +4126,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysKeepsNonConnectionOwnerError)
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, topology.Route(), topology.EndpointPolicy(),
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
@@ -4014,7 +4408,7 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsMapsPureMetadataOwnerPeerDea
     std::vector<std::pair<std::string, StatusCode>> observations;
     WorkerOcServiceCrudParam param = MakeCrudParam(
         apiManager, topology.Route(), topology.EndpointPolicy(),
-        [&observations](const HostPort &target, const Status &status) {
+        [&observations](const HostPort &target, const std::string &, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
     WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);

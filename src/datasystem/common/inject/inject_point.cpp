@@ -238,6 +238,9 @@ TaskType InjectPoint::Execute(const std::string &name, std::string &value)
     if (taskType == TaskType::PAUSE) {
         std::unique_lock<std::mutex> locker(mutex_);
         pause_ = true;
+        if (pauseEnteredHook_ != nullptr) {
+            pauseEnteredHook_();
+        }
         LOG(INFO) << "[Inject] Execute " << name << ",thread pause!";
         cv_.wait(locker, [this] { return !pause_; });
         LOG(INFO) << "[Inject] Execute " << name << ",thread running!";
@@ -307,6 +310,17 @@ uint64_t InjectPointManager::GetExecuteCount(const std::string &name)
     return injectPoint->GetExecuteCount();
 }
 
+Status InjectPointManager::SetPauseEnteredHook(const std::string &name, std::function<void()> hook)
+{
+    std::unique_lock<std::shared_timed_mutex> locker(mutex_);
+    auto it = injectPointMap_.find(name);
+    if (it == injectPointMap_.end()) {
+        return Status(StatusCode::K_NOT_FOUND, "inject point not set: " + name);
+    }
+    it->second->SetPauseEnteredHook(std::move(hook));
+    return Status::OK();
+}
+
 Status InjectPointManager::ClearAction(const std::string &name)
 {
     std::unique_lock<std::shared_timed_mutex> locker(mutex_);
@@ -351,6 +365,11 @@ Status Set(const std::string &name, const std::string &action)
 uint64_t GetExecuteCount(const std::string &name)
 {
     return InjectPointManager::Instance().GetExecuteCount(name);
+}
+
+Status SetPauseEnteredHook(const std::string &name, std::function<void()> hook)
+{
+    return InjectPointManager::Instance().SetPauseEnteredHook(name, std::move(hook));
 }
 
 Status Clear(const std::string &name)

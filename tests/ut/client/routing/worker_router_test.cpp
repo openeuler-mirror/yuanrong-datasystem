@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <atomic>
 #include <limits>
 #include <memory>
@@ -123,6 +124,227 @@ TEST_F(RoutingTest, TestSelectWorkerConsistency)
     DS_ASSERT_OK(router->SelectWorker("consistency_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, w1));
     DS_ASSERT_OK(router->SelectWorker("consistency_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, w2));
     EXPECT_EQ(w1.ToString(), w2.ToString());
+}
+
+TEST_F(RoutingTest, FailoverExclusionSpreadsTrafficAcrossSurvivors)
+{
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    ring->set_tokens_per_member(1);
+    for (int i = 0; i < 10; ++i) {
+        auto &member = (*ring->mutable_members())["127.0.0.1:" + std::to_string(1000 + i)];
+        member.set_state(::datasystem::MembershipPb::ACTIVE);
+    }
+    auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
+    for (int i = 0; i < 10; ++i) {
+        (*hostIdMap)["127.0.0.1:" + std::to_string(1000 + i)] = "host-" + std::to_string(i);
+    }
+    auto router = CreateRouter();
+    DS_ASSERT_OK(UpdateHashRing(router, ring, hostIdMap));
+
+    HostPort dead;
+    DS_ASSERT_OK(router->SelectWorker("victim-key", client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                      client::WorkerAccessAction::CONTROL, dead));
+    const auto deadAddr = dead.ToString();
+    HostPort again;
+    DS_ASSERT_OK(router->SelectWorker("victim-key", client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                      client::WorkerAccessAction::CONTROL, again));
+    EXPECT_EQ(again.ToString(), deadAddr);
+
+    std::set<std::string> reroutedOwners;
+    int reroutedKeys = 0;
+    for (int i = 0; i < 1000 && reroutedKeys < 100; ++i) {
+        const auto key = "spread-key-" + std::to_string(i);
+        HostPort owner;
+        DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                          client::WorkerAccessAction::CONTROL, owner));
+        if (owner.ToString() != deadAddr) {
+            continue;
+        }
+        HostPort rerouted;
+        DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                          client::WorkerAccessAction::CONTROL, rerouted, { dead }));
+        reroutedOwners.insert(rerouted.ToString());
+        ++reroutedKeys;
+    }
+    ASSERT_GE(reroutedKeys, 10);
+    EXPECT_GE(reroutedOwners.size(), 3U);
+}
+
+namespace {
+class CountingFilter final : public client::IWorkerFilter {
+public:
+    bool IsAvailable(const HostPort &, client::WorkerAccessAction) const override
+    {
+        ++calls_;
+        return true;
+    }
+
+    size_t Calls() const
+    {
+        return calls_.load();
+    }
+
+private:
+    mutable std::atomic<size_t> calls_{ 0 };
+};
+}  // namespace
+
+TEST_F(RoutingTest, SelectWorkersCollectsSpreadCandidatesOncePerBatch)
+{
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    ring->set_tokens_per_member(32);
+    for (int i = 0; i < 10; ++i) {
+        auto &member = (*ring->mutable_members())["127.0.0.1:" + std::to_string(1000 + i)];
+        member.set_state(::datasystem::MembershipPb::ACTIVE);
+    }
+    auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
+    for (int i = 0; i < 10; ++i) {
+        (*hostIdMap)["127.0.0.1:" + std::to_string(1000 + i)] = "host-" + std::to_string(i);
+    }
+    auto counter = std::make_shared<CountingFilter>();
+    auto router = std::make_shared<client::WorkerRouter>(
+        "host-count", std::vector<std::shared_ptr<client::IWorkerFilter>>{ counter });
+    DS_ASSERT_OK(UpdateHashRing(router, ring, hostIdMap));
+
+    std::vector<HostPort> exclude;
+    for (int i = 0; i < 5; ++i) {
+        HostPort worker;
+        DS_ASSERT_OK(worker.ParseString("127.0.0.1:" + std::to_string(1000 + i)));
+        exclude.push_back(worker);
+    }
+    std::vector<std::string> keys;
+    for (int i = 0; i < 5'000 && keys.size() < 100; ++i) {
+        const auto key = "count-key-" + std::to_string(i);
+        HostPort owner;
+        DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                          client::WorkerAccessAction::SET, owner));
+        if (std::find(exclude.begin(), exclude.end(), owner) != exclude.end()) {
+            keys.push_back(key);
+        }
+    }
+    ASSERT_EQ(keys.size(), 100U);
+
+    const auto callsBefore = counter->Calls();
+    std::unordered_map<HostPort, std::vector<std::string>> groups;
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                       client::WorkerAccessAction::SET, groups, exclude));
+    EXPECT_EQ(groups.size(), 5U);
+    // The batch collects failover candidates once per batch by walking the unique member list:
+    // exactly one filter call per available member (5), independent of the 32 tokens each
+    // member owns. A token-ring rescan would cost 32x more filter calls on this batch.
+    EXPECT_EQ(counter->Calls() - callsBefore, 5U);
+}
+
+TEST_F(RoutingTest, SelectFailoverWorkerSpreadsAndExhausts)
+{
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    ring->set_tokens_per_member(1);
+    for (int i = 0; i < 10; ++i) {
+        auto &member = (*ring->mutable_members())["127.0.0.1:" + std::to_string(1000 + i)];
+        member.set_state(::datasystem::MembershipPb::ACTIVE);
+    }
+    auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
+    for (int i = 0; i < 10; ++i) {
+        (*hostIdMap)["127.0.0.1:" + std::to_string(1000 + i)] = "host-" + std::to_string(i);
+    }
+    auto router = CreateRouter();
+    DS_ASSERT_OK(UpdateHashRing(router, ring, hostIdMap));
+
+    HostPort dead;
+    DS_ASSERT_OK(dead.ParseString("127.0.0.1:1000"));
+    std::set<std::string> survivors;
+    for (int i = 0; i < 50; ++i) {
+        HostPort picked;
+        DS_ASSERT_OK(router->SelectFailoverWorker(client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                                  client::WorkerAccessAction::SET, picked, { dead }));
+        EXPECT_NE(picked.ToString(), dead.ToString());
+        survivors.insert(picked.ToString());
+    }
+    EXPECT_GE(survivors.size(), 3U);
+
+    std::vector<HostPort> everyone;
+    for (int i = 0; i < 10; ++i) {
+        HostPort worker;
+        DS_ASSERT_OK(worker.ParseString("127.0.0.1:" + std::to_string(1000 + i)));
+        everyone.push_back(worker);
+    }
+    HostPort none;
+    const auto status = router->SelectFailoverWorker(client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                                     client::WorkerAccessAction::SET, none, everyone);
+    EXPECT_EQ(status.GetCode(), K_NO_AVAILABLE_WORKER);
+}
+
+TEST_F(RoutingTest, SelectFailoverWorkerHonorsSameNodePolicy)
+{
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    ring->set_tokens_per_member(1);
+    for (int i = 0; i < 10; ++i) {
+        auto &member = (*ring->mutable_members())["127.0.0.1:" + std::to_string(1000 + i)];
+        member.set_state(::datasystem::MembershipPb::ACTIVE);
+    }
+    auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
+    for (int i = 0; i < 10; ++i) {
+        (*hostIdMap)["127.0.0.1:" + std::to_string(1000 + i)] = i == 0 ? "host-a" : "host-" + std::to_string(i);
+    }
+    auto router = CreateRouter("host-a");
+    DS_ASSERT_OK(UpdateHashRing(router, ring, hostIdMap));
+
+    HostPort sameNode;
+    DS_ASSERT_OK(sameNode.ParseString("127.0.0.1:1000"));
+    HostPort remote;
+    DS_ASSERT_OK(remote.ParseString("127.0.0.1:1001"));
+
+    // REQUIRED_SAME_NODE samples only same-node survivors.
+    for (int i = 0; i < 20; ++i) {
+        HostPort picked;
+        DS_ASSERT_OK(router->SelectFailoverWorker(client::DataPlacementPolicy::REQUIRED_SAME_NODE,
+                                                  client::WorkerAccessAction::SET, picked, { remote }));
+        EXPECT_EQ(picked.ToString(), sameNode.ToString());
+    }
+    // When the only same-node survivor is excluded, REQUIRED_SAME_NODE fails even though remote
+    // workers are available: the placement contract must not silently degrade to remote.
+    HostPort picked;
+    const auto status = router->SelectFailoverWorker(client::DataPlacementPolicy::REQUIRED_SAME_NODE,
+                                                     client::WorkerAccessAction::SET, picked, { sameNode });
+    EXPECT_EQ(status.GetCode(), K_NO_AVAILABLE_WORKER);
+
+    // PREFERRED_SAME_NODE keeps the local preference and falls back to the ring when the local
+    // survivor is excluded.
+    for (int i = 0; i < 20; ++i) {
+        HostPort local;
+        DS_ASSERT_OK(router->SelectFailoverWorker(client::DataPlacementPolicy::PREFERRED_SAME_NODE,
+                                                  client::WorkerAccessAction::SET, local, { remote }));
+        EXPECT_EQ(local.ToString(), sameNode.ToString());
+    }
+    std::set<std::string> fallbacks;
+    for (int i = 0; i < 50; ++i) {
+        HostPort fallback;
+        DS_ASSERT_OK(router->SelectFailoverWorker(client::DataPlacementPolicy::PREFERRED_SAME_NODE,
+                                                  client::WorkerAccessAction::SET, fallback, { sameNode }));
+        EXPECT_NE(fallback.ToString(), sameNode.ToString());
+        fallbacks.insert(fallback.ToString());
+    }
+    EXPECT_GE(fallbacks.size(), 3U);
+}
+
+TEST_F(RoutingTest, SelectWorkerWithExclusionKeepsHealthyOwner)
+{
+    auto router = CreateRouter();
+    DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
+
+    HostPort owner;
+    DS_ASSERT_OK(router->SelectWorker("stable-owner-key", client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                      client::WorkerAccessAction::CONTROL, owner));
+    HostPort other;
+    DS_ASSERT_OK(router->SelectWorker("stable-owner-key-other", client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                      client::WorkerAccessAction::CONTROL, other));
+    ASSERT_NE(other.ToString(), owner.ToString());
+
+    // An unrelated exclusion must not move a healthy key off its deterministic ring owner.
+    HostPort picked;
+    DS_ASSERT_OK(router->SelectWorker("stable-owner-key", client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                      client::WorkerAccessAction::CONTROL, picked, { other }));
+    EXPECT_EQ(picked.ToString(), owner.ToString());
 }
 
 TEST_F(RoutingTest, RedirectCandidatesPreservePlacementExclusionsAndHealth)

@@ -121,7 +121,7 @@ OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 Status OCMigrateMetadataManager::Init(
     const HostPort &localHostPort,
     const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder,
-    MetadataRpcObserver metadataRpcObserver)
+    MetadataRpcObserver metadataRpcObserver, std::function<std::string(const HostPort &)> memberIdResolver)
 {
     localHostPort_ = localHostPort;
     {
@@ -132,6 +132,7 @@ Status OCMigrateMetadataManager::Init(
     {
         std::lock_guard<std::mutex> lock(metadataRpcObserverMutex_);
         metadataRpcObserver_ = std::move(metadataRpcObserver);
+        memberIdResolver_ = std::move(memberIdResolver);
     }
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "MigrateMetadataThreadPool");
 
@@ -153,11 +154,35 @@ void OCMigrateMetadataManager::Shutdown()
     }
     std::unique_lock<std::mutex> lock(metadataRpcObserverMutex_);
     // Migration tasks can finish after shutdown starts; clearing first makes those later observations no-ops.
+    // Both callbacks are detached in the same critical section the in-flight barrier drains so a
+    // copied-but-not-yet-invoked resolver cannot outlive the owner it captures.
     metadataRpcObserver_ = {};
-    metadataRpcObserverCv_.wait(lock, [this] { return metadataRpcObserversInFlight_ == 0; });
+    memberIdResolver_ = {};
+    metadataRpcObserverCv_.wait(lock, [this] { return metadataCallbacksInFlight_ == 0; });
 }
 
-void OCMigrateMetadataManager::ObserveMetadataRpcResult(const std::string &targetAddress, const Status &status)
+std::string OCMigrateMetadataManager::ResolveTargetMemberId(const HostPort &target)
+{
+    std::function<std::string(const HostPort &)> resolver;
+    {
+        std::lock_guard<std::mutex> lock(metadataRpcObserverMutex_);
+        if (memberIdResolver_ == nullptr) {
+            return std::string{};
+        }
+        resolver = memberIdResolver_;
+        ++metadataCallbacksInFlight_;
+    }
+    Raii finish([this] {
+        std::lock_guard<std::mutex> lock(metadataRpcObserverMutex_);
+        --metadataCallbacksInFlight_;
+        metadataRpcObserverCv_.notify_all();
+    });
+    INJECT_POINT_NO_RETURN("OCMigrateMetadataManager.ResolveTargetMemberId.afterCopy");
+    return resolver(target);
+}
+
+void OCMigrateMetadataManager::ObserveMetadataRpcResult(const std::string &targetAddress,
+                                                        const std::string &initiatedMemberId, const Status &status)
 {
     HostPort target;
     if (target.ParseString(targetAddress).IsError()) {
@@ -170,14 +195,14 @@ void OCMigrateMetadataManager::ObserveMetadataRpcResult(const std::string &targe
             return;
         }
         observer = metadataRpcObserver_;
-        ++metadataRpcObserversInFlight_;
+        ++metadataCallbacksInFlight_;
     }
     Raii finish([this] {
         std::lock_guard<std::mutex> lock(metadataRpcObserverMutex_);
-        --metadataRpcObserversInFlight_;
+        --metadataCallbacksInFlight_;
         metadataRpcObserverCv_.notify_all();
     });
-    observer(target, status);
+    observer(target, initiatedMemberId, status);
 }
 
 Status OCMigrateMetadataManager::MigrateTopologyMetadata(
@@ -533,9 +558,12 @@ Status OCMigrateMetadataManager::BatchMigrateMetadata(
     MigrateMetadataRspPb rsp;
     auto sendStatus = CheckTopologyExecution(info);
     if (sendStatus.IsOk()) {
+        HostPort destTarget;
+        const std::string initiatedMemberId =
+            destTarget.ParseString(info.destAddr).IsOk() ? ResolveTargetMemberId(destTarget) : std::string{};
         INJECT_POINT("BatchMigrateMetadata.rpc.error");
         sendStatus = api->MigrateMetadata(req, rsp);
-        ObserveMetadataRpcResult(info.destAddr, sendStatus);
+        ObserveMetadataRpcResult(info.destAddr, initiatedMemberId, sendStatus);
     }
     if (sendStatus.IsOk()) {
         sendStatus = CheckTopologyExecution(info);

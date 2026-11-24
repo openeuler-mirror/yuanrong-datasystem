@@ -95,19 +95,7 @@ cluster::ControlBackendProbeResult ProbeMemberLiveness(WatchDispatcherImpl &disp
     const auto probe = dispatcher.ProbeWorkerReachable(target.address, deadline);
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt);
-    auto outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
-    if (probe.rpcDispatched) {
-        outcome = cluster::ControlBackendProbeOutcome::ERROR;
-        if (probe.status.IsOk()) {
-            outcome = cluster::ControlBackendProbeOutcome::RESPONSE;
-        } else if (probe.status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
-            outcome = cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
-        } else if (probe.status.GetCode() == K_RPC_UNAVAILABLE || probe.status.GetCode() == K_RPC_PEER_DEAD) {
-            outcome = cluster::ControlBackendProbeOutcome::UNAVAILABLE;
-        } else if (probe.status.GetCode() == K_RPC_CANCELLED) {
-            outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
-        }
-    }
+    const auto outcome = coordinator::ProbeOutcomeFromWorkerReachability(probe);
     return { target, std::nullopt, outcome, elapsed };
 }
 
@@ -443,7 +431,6 @@ Status CoordinatorServiceImpl::InitInternal()
 void CoordinatorServiceImpl::ConfigureTopologyHostOptions(TopologyControlHost::Options &options) const
 {
     options.maxClusters = FLAGS_coordinator_topology_max_active_clusters;
-    options.activeFailureWindow = std::chrono::seconds(FLAGS_node_timeout_s);
     const uint32_t classifierAbsenceS = FLAGS_node_dead_timeout_s > FLAGS_node_timeout_s
                                             ? FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s
                                             : 1U;
@@ -1149,20 +1136,36 @@ Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRsp
 
     int64_t ttlMs = 0;
     int64_t remainingTtlMs = 0;
-    RETURN_IF_NOT_OK(store_->KeepAlive(req.key(), ttlMs, remainingTtlMs, req.expected_mod_revision()));
+    int64_t acceptedModRevision = 0;
+    std::string acceptedMembershipValue;
+    RETURN_IF_NOT_OK(store_->KeepAlive(req.key(), ttlMs, remainingTtlMs, req.expected_mod_revision(),
+                                       &acceptedModRevision, &acceptedMembershipValue));
     topologyRecoveryManager_->NotifyMembershipActivity(parsed);
     if (topologyControlHost_ != nullptr) {
-        if (req.failed_targets_size() == 0) {
-            topologyControlHost_->RecordWorkerFailureSummaries(parsed.clusterName, parsed.relativeKey, {});
+        // Bind the summary to the membership incarnation the renewal actually accepted. Re-reading
+        // the current record after the renewal would re-label a paused old handler with a
+        // replacement's identity and let its stale payload overwrite the replacement's votes.
+        cluster::MembershipValue acceptedValue;
+        if (cluster::MembershipValueCodec::Decode(acceptedMembershipValue, acceptedValue).IsError()) {
+            LOG(WARNING) << "Skip worker failure summaries because renewed membership cannot be decoded, key="
+                         << req.key();
             rsp.set_ttl(ttlMs);
             rsp.set_remaining_ttl(remainingTtlMs);
             return Status::OK();
         }
-        cluster::MembershipRecord reporter;
-        auto reporterRc = ReadMembershipRecord(*store_, req.key(), parsed.relativeKey, reporter);
-        if (reporterRc.IsError()) {
-            LOG(WARNING) << "Skip worker failure summaries because reporter membership is unavailable, key="
-                         << req.key() << ", rc=" << reporterRc.ToString();
+        const cluster::MembershipRecord reporter{ parsed.relativeKey, acceptedValue.lifecycleState,
+                                                  acceptedValue.timestamp, acceptedValue.hostId };
+        INJECT_POINT_NO_RETURN("CoordinatorServiceImpl.KeepAlive.afterAcceptedSnapshot");
+        // Target-level evidence generations, index-aligned with failed_targets; an old Worker that
+        // does not send them leaves a shorter array whose entries are all treated as zero.
+        std::unordered_map<std::string, uint64_t> generationByTarget;
+        for (int index = 0; index < req.failed_targets_size(); ++index) {
+            generationByTarget[req.failed_targets(index)] =
+                index < req.failed_target_generations_size() ? req.failed_target_generations(index) : 0;
+        }
+        if (req.failed_targets_size() == 0) {
+            topologyControlHost_->RecordWorkerFailureSummaries(
+                parsed.clusterName, reporter, {}, req.summary_version(), acceptedModRevision, generationByTarget);
             rsp.set_ttl(ttlMs);
             rsp.set_remaining_ttl(remainingTtlMs);
             return Status::OK();
@@ -1184,7 +1187,9 @@ Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRsp
                 failedTargets.push_back({ target, cluster::MemberLifecycleState::READY, -1, "" });
             }
         }
-        topologyControlHost_->RecordWorkerFailureSummaries(parsed.clusterName, reporter, failedTargets);
+        topologyControlHost_->RecordWorkerFailureSummaries(parsed.clusterName, reporter, failedTargets,
+                                                           req.summary_version(), acceptedModRevision,
+                                                           generationByTarget);
     }
     rsp.set_ttl(ttlMs);
     rsp.set_remaining_ttl(remainingTtlMs);

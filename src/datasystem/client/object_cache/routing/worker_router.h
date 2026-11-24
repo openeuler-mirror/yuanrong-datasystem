@@ -112,6 +112,13 @@ public:
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude = {}) const;
 
+    // Group-level failover: one uniformly sampled available worker for a whole failed batch,
+    // so a batch stays one RPC group per request while retries spread across requests.
+    // The placement policy keeps its deterministic-path contract: REQUIRED_SAME_NODE samples only
+    // same-node survivors and fails when they are exhausted, PREFERRED_SAME_NODE prefers them.
+    Status SelectFailoverWorker(DataPlacementPolicy policy, WorkerAccessAction action, HostPort &worker,
+                                const std::vector<HostPort> &exclude = {}) const;
+
     Status SelectWorkerByScheduling(const std::string &key, DataPlacementPolicy policy, WorkerAccessAction action,
                                     HostPort &worker, const std::vector<HostPort> &exclude = {}) const;
 
@@ -157,9 +164,18 @@ private:
 
     bool IsWorkerAvailable(const HostPort &addr, WorkerAccessAction action) const;
     bool IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const;
+    Status SelectFirstAvailableFromRing(const std::shared_ptr<const TokenIndex> &idx, int start,
+                                        WorkerAccessAction action, const std::vector<HostPort> &exclude,
+                                        HostPort &worker) const;
+    std::vector<HostPort> CollectSpreadCandidates(const std::shared_ptr<const TokenIndex> &idx,
+                                                  WorkerAccessAction action,
+                                                  const std::vector<HostPort> &exclude) const;
+    Status SelectSpreadFromRing(const std::shared_ptr<const TokenIndex> &idx, WorkerAccessAction action,
+                                const std::vector<HostPort> &exclude, HostPort &worker) const;
     Status SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy, WorkerAccessAction action,
                                 HostPort &worker, const std::vector<HostPort> &exclude,
-                                const std::shared_ptr<const RingView> &view) const;
+                                const std::shared_ptr<const RingView> &view,
+                                const std::vector<HostPort> *spreadCandidates = nullptr) const;
 };
 
 }  // namespace client

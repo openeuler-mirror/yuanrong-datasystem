@@ -873,10 +873,12 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
     int64_t ttlMs = keepAliveTtlMs_;
     int64_t remainingTtlMs = 0;
     std::string coordinatorId;
-    const auto failedTargets = GetFailedTargets(std::chrono::steady_clock::now());
+    std::vector<uint64_t> failedTargetGenerations;
+    const auto failedTargets = GetFailedTargets(std::chrono::steady_clock::now(), &failedTargetGenerations);
+    const uint64_t summaryVersion = keepAliveSummaryVersion_.fetch_add(1, std::memory_order_relaxed) + 1;
     auto rc = proxy_->KeepAlive(BuildRealKey(keepAliveTableName_, keepAliveKey_), ttlMs, remainingTtlMs,
                                 DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, startedFrom.coordinatorId,
-                                startedFrom.modRevision, failedTargets);
+                                startedFrom.modRevision, failedTargets, summaryVersion, failedTargetGenerations);
     uint64_t successEpoch = 0;
     {
         MembershipMutationGuard mutationGuard(*this, MembershipMutationOperation::RENEW_KEEPALIVE);
@@ -897,12 +899,41 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
     return rc;
 }
 
+bool DsCoordinationBackend::QualifyForReportingLocked(RpcFailedState &state, std::chrono::steady_clock::time_point now,
+                                                      std::chrono::milliseconds failureWindow)
+{
+    if (state.failedCount < MIN_PEER_RPC_FAILURES_TO_REPORT || now - state.firstFailedAt < failureWindow) {
+        return false;
+    }
+    // Qualification rolls the accumulation so the next batch re-qualifies independently: every
+    // qualified window advances the target's evidence generation, while the reported entry stays
+    // sticky until a success clears it. The rolled count keeps repeated keepalive reads from
+    // advancing the generation again.
+    state.reported = true;
+    state.evidenceGeneration = ++evidenceGenerationSource_;
+    state.failedCount = 0;
+    return true;
+}
+
 void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target)
 {
-    RecordPeerRpcFailure(target, std::chrono::steady_clock::now());
+    RecordPeerRpcFailure(target, std::chrono::steady_clock::now(), std::string{}, nullptr);
+}
+
+void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target, const std::string &initiatedMemberId,
+                                                 const std::function<bool()> &isMemberPresent)
+{
+    RecordPeerRpcFailure(target, std::chrono::steady_clock::now(), initiatedMemberId, isMemberPresent);
 }
 
 void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now)
+{
+    RecordPeerRpcFailure(target, now, std::string{}, nullptr);
+}
+
+void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target, std::chrono::steady_clock::time_point now,
+                                                 const std::string &initiatedMemberId,
+                                                 const std::function<bool()> &isMemberPresent)
 {
     const auto targetAddress = target.ToString();
     if (targetAddress.empty()) {
@@ -914,31 +945,58 @@ void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target, std::ch
     bool shouldWake = false;
     uint64_t failedCount = 0;
     int64_t failedMs = 0;
+    uint64_t evidenceGeneration = 0;
     {
         std::lock_guard<std::mutex> lock(rpcFailedMutex_);
-        auto &state = rpcFailedStates_[targetAddress];
-        if (!state.reported && state.failedCount > 0 && now - state.lastFailedAt > failureWindow) {
-            state.failedCount = 0;
-            state.firstFailedAt = now;
+        // Publish the recording intent before validation: a concurrent removal cleanup must not slip
+        // through the lock-free fast path of ClearPeerRpcFailure while this record is still between
+        // validation and insertion.
+        hasRpcFailures_.store(true, std::memory_order_release);
+        if (isMemberPresent != nullptr && !isMemberPresent()) {
+            // Late-RPC guard evaluated under the recording lock: a failure for an address already
+            // absent from the current topology must not re-create evidence that later topology
+            // diffs would no longer find to discard.
+            if (rpcFailedStates_.empty()) {
+                hasRpcFailures_.store(false, std::memory_order_release);
+            }
+            return;
         }
+        INJECT_POINT_NO_RETURN("DsCoordinationBackend.RecordPeerRpcFailure.afterValidation");
+        auto &state = rpcFailedStates_[targetAddress];
+        if (state.memberId != initiatedMemberId) {
+            // A different incarnation now owns this address: its evidence starts fresh instead of
+            // smearing the departing member's accumulation.
+            state = RpcFailedState{};
+            state.memberId = initiatedMemberId;
+        }
+        // Evidence accumulates across gaps: nothing here resets the counter, so sparse failure
+        // streams keep building toward the reporting threshold.
         if (state.failedCount == 0) {
             state.firstFailedAt = now;
         }
         ++state.failedCount;
         state.lastFailedAt = now;
-        hasRpcFailures_.store(true, std::memory_order_release);
-        if (!state.reported && state.failedCount >= MIN_PEER_RPC_FAILURES_TO_REPORT
-            && now - state.firstFailedAt >= failureWindow) {
-            state.reported = true;
+        failedCount = state.failedCount;
+        if (QualifyForReportingLocked(state, now, failureWindow)) {
+            // The record path re-wakes the summary so the fresh generation leaves on the next
+            // keepalive instead of waiting for the periodic tick.
             immediateReportSignal_ = true;
             shouldWake = true;
         }
-        failedCount = state.failedCount;
         failedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - state.firstFailedAt).count();
+        evidenceGeneration = state.evidenceGeneration;
     }
+    LogPeerRpcFailureObserved(targetAddress, shouldWake, failedCount, failedMs, evidenceGeneration);
+}
+
+void DsCoordinationBackend::LogPeerRpcFailureObserved(const std::string &targetAddress, bool shouldWake,
+                                                      uint64_t failedCount, int64_t failedMs,
+                                                      uint64_t evidenceGeneration)
+{
     if (shouldWake) {
         LOG(INFO) << "CLUSTER_FAILURE_REPORT role=worker action=summary_qualified reporter=" << watcherAddr_
-                  << " target=" << targetAddress << " failed_count=" << failedCount << " failed_ms=" << failedMs;
+                  << " target=" << targetAddress << " failed_count=" << failedCount << " failed_ms=" << failedMs
+                  << " evidence_generation=" << evidenceGeneration;
         WakeKeepAliveForFailureSummary();
     } else {
         VLOG(1) << "CLUSTER_FAILURE_OBSERVE role=worker reporter=" << watcherAddr_ << " target=" << targetAddress
@@ -946,9 +1004,9 @@ void DsCoordinationBackend::RecordPeerRpcFailure(const HostPort &target, std::ch
     }
 }
 
-void DsCoordinationBackend::RecordPeerRpcSuccess(const HostPort &target)
+void DsCoordinationBackend::RecordPeerRpcSuccess(const HostPort &target, const std::string &expectedMemberId)
 {
-    ClearPeerRpcFailure(target, "success_reset");
+    ClearPeerRpcFailure(target, "success_reset", &expectedMemberId);
 }
 
 bool DsCoordinationBackend::IsPeerRpcFailureReported(const HostPort &target) const
@@ -958,12 +1016,17 @@ bool DsCoordinationBackend::IsPeerRpcFailureReported(const HostPort &target) con
     return state != rpcFailedStates_.end() && state->second.reported;
 }
 
-void DsCoordinationBackend::DiscardPeerRpcFailure(const HostPort &target)
+void DsCoordinationBackend::DiscardPeerRpcFailure(const HostPort &target, const std::string &expectedMemberId)
 {
-    ClearPeerRpcFailure(target, "incarnation_reset");
+    if (expectedMemberId.empty()) {
+        ClearPeerRpcFailure(target, "incarnation_reset");
+        return;
+    }
+    ClearPeerRpcFailure(target, "incarnation_reset", &expectedMemberId);
 }
 
-void DsCoordinationBackend::ClearPeerRpcFailure(const HostPort &target, const char *action)
+void DsCoordinationBackend::ClearPeerRpcFailure(const HostPort &target, const char *action,
+                                                const std::string *expectedMemberId)
 {
     const auto targetAddress = target.ToString();
     if (targetAddress.empty()) {
@@ -977,6 +1040,12 @@ void DsCoordinationBackend::ClearPeerRpcFailure(const HostPort &target, const ch
         std::lock_guard<std::mutex> lock(rpcFailedMutex_);
         const auto found = rpcFailedStates_.find(targetAddress);
         const bool existed = found != rpcFailedStates_.end();
+        if (existed && expectedMemberId != nullptr && !found->second.memberId.empty()
+            && found->second.memberId != *expectedMemberId) {
+            // The evidence at this address belongs to another member incarnation and must survive
+            // this scoped cleanup.
+            return;
+        }
         const bool reported = existed && found->second.reported;
         if (existed) {
             rpcFailedStates_.erase(found);
@@ -1019,35 +1088,51 @@ void DsCoordinationBackend::ClearPeerRpcFailureObservations()
     hasRpcFailures_.store(false, std::memory_order_release);
 }
 
-std::vector<std::string> DsCoordinationBackend::GetFailedTargets(std::chrono::steady_clock::time_point now)
+std::vector<std::string> DsCoordinationBackend::GetFailedTargets(std::chrono::steady_clock::time_point now,
+                                                                 std::vector<uint64_t> *generations)
 {
     const auto failureWindow =
         std::chrono::milliseconds(static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND
                                   / PEER_RPC_FAILURE_WINDOW_DIVISOR);
-    const auto activeWindow = std::chrono::milliseconds(static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND * 2);
     if (!hasRpcFailures_.load(std::memory_order_acquire)) {
+        if (generations != nullptr) {
+            generations->clear();
+        }
         return {};
     }
-    std::vector<std::string> targets;
+    std::vector<std::pair<std::string, uint64_t>> qualified;
     {
         std::lock_guard<std::mutex> lock(rpcFailedMutex_);
-        for (auto iter = rpcFailedStates_.begin(); iter != rpcFailedStates_.end();) {
-            const auto &state = iter->second;
-            if (now - state.lastFailedAt > activeWindow) {
-                iter = rpcFailedStates_.erase(iter);
+        for (auto iter = rpcFailedStates_.begin(); iter != rpcFailedStates_.end(); ++iter) {
+            auto &state = iter->second;
+            // Entries have no time-based expiry: only a successful peer RPC or a membership change
+            // clears them. Reported targets stay listed so every keepalive keeps re-asserting the
+            // vote at the generation the last qualified window reached. A batch matured only by
+            // keepalive time qualifies here even when the entry is already reported: the fresh
+            // generation rides the summary this read is building without an extra wake.
+            if (QualifyForReportingLocked(state, now, failureWindow)) {
+                qualified.emplace_back(iter->first, state.evidenceGeneration);
                 continue;
             }
-            if (state.failedCount >= MIN_PEER_RPC_FAILURES_TO_REPORT && now - state.firstFailedAt >= failureWindow) {
-                targets.push_back(iter->first);
+            if (state.reported) {
+                qualified.emplace_back(iter->first, state.evidenceGeneration);
             }
-            ++iter;
-        }
-        if (rpcFailedStates_.empty()) {
-            immediateReportSignal_ = false;
-            hasRpcFailures_.store(false, std::memory_order_release);
         }
     }
-    std::sort(targets.begin(), targets.end());
+    std::sort(qualified.begin(), qualified.end(),
+              [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+    std::vector<std::string> targets;
+    targets.reserve(qualified.size());
+    for (const auto &entry : qualified) {
+        targets.push_back(entry.first);
+    }
+    if (generations != nullptr) {
+        generations->clear();
+        generations->reserve(qualified.size());
+        for (const auto &entry : qualified) {
+            generations->push_back(entry.second);
+        }
+    }
     if (!targets.empty()) {
         VLOG(1) << "CLUSTER_FAILURE_REPORT role=worker reporter=" << watcherAddr_
                 << " targets=" << VectorToString(targets);

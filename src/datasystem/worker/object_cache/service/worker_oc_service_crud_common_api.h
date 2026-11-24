@@ -107,7 +107,8 @@ struct WorkerOcServiceCrudParam {
     const ObjectEndpointPolicy *endpointPolicy;
     const std::atomic<bool> *exitRequested;
     PeerUbAdmission *ubAdmission{ nullptr };
-    std::function<void(const HostPort &, const Status &)> metadataRpcObserver{};
+    std::function<void(const HostPort &, const std::string &, const Status &)> metadataRpcObserver{};
+    std::function<std::string(const HostPort &)> metadataRpcMemberIdResolver{};
     bool allowDirectoryLag;
     std::function<bool(const HostPort &)> metadataRpcFailureReported{};
 };
@@ -164,8 +165,9 @@ public:
             CHECK_FAIL_RETURN_STATUS(
                 GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            auto observation = BeginMetadataRpcObservation(workerMasterApi);
             auto status = fun(req, rsp);
-            ObserveMetadataRpc(workerMasterApi, status);
+            ObserveMetadataRpc(observation, status);
             RETURN_IF_NOT_OK(status);
             if (!rsp.meta_is_moving()) {
                 if (rsp.info().redirect_meta_address().empty()) {
@@ -178,8 +180,9 @@ public:
                 CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                          "hash master get failed, RedirectRetryWhenMetaMoving failed");
                 req.set_redirect(false);
+                auto redirectObservation = BeginMetadataRpcObservation(workerMasterApi);
                 status = fun(req, rsp);
-                ObserveMetadataRpc(workerMasterApi, status);
+                ObserveMetadataRpc(redirectObservation, status);
                 RETURN_IF_NOT_OK(status);
                 return Status::OK();
             }
@@ -447,8 +450,22 @@ protected:
 
     static void SleepForMetaMovingRetry(int64_t sleepTimeMs);
 
-    void ObserveMetadataRpc(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
-                            const Status &status) const;
+    /**
+     * @brief Capture the observation context for a metadata RPC before it is sent.
+     *
+     * The member id is bound at initiation so a completed outcome can be validated against the
+     * member that currently owns the address.
+     */
+    struct MetadataRpcObservation {
+        HostPort target;
+        std::string memberId;
+    };
+
+    MetadataRpcObservation BeginMetadataRpcObservation(const HostPort &target) const;
+    MetadataRpcObservation BeginMetadataRpcObservation(
+        const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi) const;
+
+    void ObserveMetadataRpc(const MetadataRpcObservation &observation, const Status &status) const;
 
     bool IsMetadataRpcFailureReported(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi) const;
 
@@ -539,7 +556,8 @@ protected:
     const worker::MetadataRouteResolver *metadataRouteResolver_{ nullptr };
     const ObjectEndpointPolicy *endpointPolicy_{ nullptr };
     const std::atomic<bool> *exitRequested_{ nullptr };
-    std::function<void(const HostPort &, const Status &)> metadataRpcObserver_;
+    std::function<void(const HostPort &, const std::string &, const Status &)> metadataRpcObserver_;
+    std::function<std::string(const HostPort &)> metadataRpcMemberIdResolver_;
     const bool allowDirectoryLag_{ false };
     std::function<bool(const HostPort &)> metadataRpcFailureReported_;
 

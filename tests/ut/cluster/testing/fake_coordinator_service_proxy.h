@@ -212,7 +212,7 @@ public:
 
     Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t,
                      std::string *coordinatorId, const std::string &expectedCoordinatorId, int64_t expectedModRevision,
-                     const std::vector<std::string> & = {}) override
+                     const std::vector<std::string> &, uint64_t, const std::vector<uint64_t> &) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!expectedCoordinatorId.empty() && expectedCoordinatorId != coordinatorId_) {

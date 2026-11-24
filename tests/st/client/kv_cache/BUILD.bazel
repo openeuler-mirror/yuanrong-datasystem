@@ -270,6 +270,40 @@ ds_cc_test(
     ],
 )
 
+# !2701 removed the client "add_client_miss_libs_fixme" link workaround, so bazel targets that enter
+# through the client closure no longer inherit the worker service providers their .so's reference.
+# Manual ST targets must list the providers explicitly to link.
+ST_WORKER_LINK_PROVIDERS = [
+    "//src/datasystem/common/l2cache:persistence_api",
+    "//src/datasystem/master/object_cache:master_worker_oc_local_api",
+    "//src/datasystem/worker:worker_liveness_check",
+    "//src/datasystem/worker:worker_oc_server",
+    "//src/datasystem/worker:worker_service_impl",
+    "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+    "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
+    "//src/datasystem/worker/object_cache/device:worker_device_oc_manager",
+    "//src/datasystem/worker/object_cache/service:worker_oc_service_delete_impl",
+    "//src/datasystem/worker/object_cache/service:worker_oc_service_multi_publish_impl",
+    "//src/datasystem/worker/object_cache/service:worker_oc_service_publish_impl",
+]
+
+ds_cc_test(
+    name = "fast_isolation_guard_test",
+    srcs = ["fast_isolation_guard_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + ST_WORKER_LINK_PROVIDERS + [
+        "//src/datasystem/client/object_cache/routing:routing",
+        "//src/datasystem/client/object_cache/transport:client_transport",
+        "//src/datasystem/cluster:coordination_timing",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
 ds_cc_test(
     name = "routing_topology_convergence_test",
     srcs = ["routing_topology_convergence_test.cpp"],

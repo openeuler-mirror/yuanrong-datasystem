@@ -22,6 +22,8 @@
 
 #include <string>
 
+#include "datasystem/utils/status.h"
+
 namespace datasystem {
 /**
  * @brief Options for RPC setting up.
@@ -58,11 +60,28 @@ public:
      */
     int GetHWM() const;
 
+    /**
+     * @brief Point the generated stub at a caller-owned slot that receives the real transport
+     *        attempt status (filled after controller result mapping, before any local
+     *        post-deadline check). Diagnostics only: the slot must outlive the stub call and is
+     *        never stored by shared API objects.
+     * @param[in] capture Caller-owned status slot; nullptr disables capture.
+     */
+    void SetAttemptStatusCapture(Status *capture);
+
+    /**
+     * @brief Get the attempt status capture slot, if any.
+     * @return The slot or nullptr.
+     */
+    Status *GetAttemptStatusCapture() const;
+
 private:
     int timeout_;
     int hwm_;  // RPC high-watermark
 
     bool immediate_;
+
+    Status *attemptStatusCapture_{ nullptr };
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_RPC_OPTIONS_H

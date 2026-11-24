@@ -993,7 +993,7 @@ private:
                                    const cluster::CancellationToken &cancellation);
 
     void FillWorkerRedirect(const std::string &selectionKey, WorkerRedirectPb &redirect) const;
-    void ObserveMetadataRpc(const HostPort &target, const Status &status);
+    void ObserveMetadataRpc(const HostPort &target, const std::string &initiatedMemberId, const Status &status);
 
     struct PreparedScaleInCleanupState {
         std::vector<std::string> objectIds;

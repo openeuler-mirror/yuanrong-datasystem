@@ -137,6 +137,12 @@ public:
         backend->RecordPeerRpcFailure(target, now);
     }
 
+    static void ObservePeerRpcResult(TopologyEngine &engine, const HostPort &target,
+                                     const std::string &initiatedMemberId, const Status &status)
+    {
+        engine.ObservePeerRpcResult(target, initiatedMemberId, status);
+    }
+
     static std::vector<std::string> GetFailedTargets(TopologyEngine &engine, std::chrono::steady_clock::time_point now)
     {
         auto *backend = dynamic_cast<DsCoordinationBackend *>(engine.memberBackend_.get());
@@ -1546,6 +1552,54 @@ TEST(TopologyEngineTest, RemovedPeerCannotCarryFailureEvidenceIntoReplacement)
     PutTopology(proxy, clusterName, MakeTopologyWithPeer(3, 1, 'c'));
     DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
     EXPECT_TRUE(TopologyEngineTestPeer::GetFailedTargets(*engine, now).empty());
+}
+
+TEST(TopologyEngineTest, PeerRpcEvidenceBindsToInitiatedMemberId)
+{
+    // Retire the reporting window so three observed failures qualify immediately.
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 0;
+    Raii restoreNodeTimeout([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "evidence-initiated-member-id";
+    PutTopology(proxy, clusterName, MakeTopologyWithPeer(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+
+    HostPort peer("127.0.0.1", 10'002);
+    const std::string peerId(16, 'b');
+    const auto now = [&] { return std::chrono::steady_clock::now(); };
+    const auto failures = Status(K_RPC_UNAVAILABLE, "peer unreachable");
+
+    // A failure observed under a stale incarnation id must not charge the current member even
+    // though the address is still present.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        TopologyEngineTestPeer::ObservePeerRpcResult(*engine, peer, std::string(16, 'z'), failures);
+    }
+    EXPECT_TRUE(TopologyEngineTestPeer::GetFailedTargets(*engine, now()).empty());
+
+    // The current incarnation accumulates evidence normally.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        TopologyEngineTestPeer::ObservePeerRpcResult(*engine, peer, peerId, failures);
+    }
+    EXPECT_EQ(TopologyEngineTestPeer::GetFailedTargets(*engine, now()), std::vector<std::string>({ peer.ToString() }));
+
+    // A late success from the stale incarnation must not clear the current member's evidence.
+    TopologyEngineTestPeer::ObservePeerRpcResult(*engine, peer, std::string(16, 'z'), Status::OK());
+    EXPECT_EQ(TopologyEngineTestPeer::GetFailedTargets(*engine, now()), std::vector<std::string>({ peer.ToString() }));
+
+    // The current incarnation's success clears it.
+    TopologyEngineTestPeer::ObservePeerRpcResult(*engine, peer, peerId, Status::OK());
+    EXPECT_TRUE(TopologyEngineTestPeer::GetFailedTargets(*engine, now()).empty());
+
+    // An observation without a captured incarnation id is unattributable and must be dropped.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        TopologyEngineTestPeer::ObservePeerRpcResult(*engine, peer, std::string{}, failures);
+    }
+    EXPECT_TRUE(TopologyEngineTestPeer::GetFailedTargets(*engine, now()).empty());
 }
 
 TEST(TopologyEngineTest, SnapshotPublicationExceptionDoesNotTerminateStateThread)

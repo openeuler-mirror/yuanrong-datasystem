@@ -116,7 +116,7 @@ public:
     RETURN_UNSUPPORTED_MASTER_API(GDecNestedRef, master::GDecNestedRefReqPb &, master::GDecNestedRefRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(UpdateMeta, master::UpdateMetaReqPb &, master::UpdateMetaRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(DeleteAllCopyMeta, master::DeleteAllCopyMetaReqPb &,
-                                  master::DeleteAllCopyMetaRspPb &)
+                                  master::DeleteAllCopyMetaRspPb &, worker::RpcAttemptObservation * = nullptr)
     RETURN_UNSUPPORTED_MASTER_API(GDecreaseMasterRef, const std::vector<std::string> &,
                                   std::unordered_set<std::string> &, std::vector<std::string> &,
                                   const std::string &)

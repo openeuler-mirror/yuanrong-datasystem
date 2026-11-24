@@ -7741,9 +7741,32 @@ Status ObjectClientImpl::BuildMSetRouteGroups(const std::vector<std::string> &ke
 {
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
+    const auto excluded = MergeWriteTargetExclusions({});
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(keys, dataPlacementPolicy_, client::WorkerAccessAction::SET, groupedKeys,
-                                            MergeWriteTargetExclusions({})));
+    RETURN_IF_NOT_OK(
+        routing->SelectWorkers(keys, dataPlacementPolicy_, client::WorkerAccessAction::SET, groupedKeys, {}));
+    if (!excluded.empty()) {
+        // Quarantine steering keeps whole would-be-owner cohorts together: each excluded owner's
+        // group moves to one sampled survivor instead of scattering its keys per request retry.
+        // Migrated buckets land in a separate map: inserting into groupedKeys mid-iteration could
+        // rehash it and invalidate the loop iterator.
+        std::unordered_map<HostPort, std::vector<std::string>> migratedGroups;
+        for (auto it = groupedKeys.begin(); it != groupedKeys.end();) {
+            if (std::find(excluded.begin(), excluded.end(), it->first) == excluded.end()) {
+                ++it;
+                continue;
+            }
+            HostPort survivor;
+            RETURN_IF_NOT_OK(routing->SelectFailoverWorker(dataPlacementPolicy_, client::WorkerAccessAction::SET,
+                                                           survivor, excluded));
+            migratedGroups[survivor].insert(migratedGroups[survivor].end(), it->second.begin(), it->second.end());
+            it = groupedKeys.erase(it);
+        }
+        for (auto &entry : migratedGroups) {
+            auto &bucket = groupedKeys[entry.first];
+            bucket.insert(bucket.end(), entry.second.begin(), entry.second.end());
+        }
+    }
     std::unordered_map<std::string, size_t> valueIndexes;
     valueIndexes.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -7816,28 +7839,18 @@ Status ObjectClientImpl::BuildMSetRetryRouteGroups(const MSetRouteGroup &group,
 {
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
-    std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(group.keys, dataPlacementPolicy_, client::WorkerAccessAction::SET,
-                                            groupedKeys, MergeWriteTargetExclusions(excludedWorkers)));
-    std::unordered_map<std::string, size_t> valueIndexes;
-    valueIndexes.reserve(group.keys.size());
-    for (size_t i = 0; i < group.keys.size(); ++i) {
-        valueIndexes.emplace(group.keys[i], i);
-    }
-    groups.reserve(groupedKeys.size());
-    for (auto &entry : groupedKeys) {
-        MSetRouteGroup retryGroup;
-        retryGroup.worker = entry.first;
-        retryGroup.keys = std::move(entry.second);
-        retryGroup.values.reserve(retryGroup.keys.size());
-        for (const auto &key : retryGroup.keys) {
-            auto value = valueIndexes.find(key);
-            CHECK_FAIL_RETURN_STATUS(value != valueIndexes.end(), K_RUNTIME_ERROR,
-                                     "MSet retry route contains unknown key");
-            retryGroup.values.emplace_back(group.values[value->second]);
-        }
-        groups.emplace_back(std::move(retryGroup));
-    }
+    // Keep a failed batch as one retry group: pick a single failover survivor for the whole
+    // group (randomized per request) so retries spread across requests without splitting the
+    // batch into per-key serial RPC groups. The original placement policy stays in force.
+    HostPort survivor;
+    RETURN_IF_NOT_OK(routing->SelectFailoverWorker(
+        dataPlacementPolicy_, client::WorkerAccessAction::SET, survivor,
+        MergeWriteTargetExclusions(excludedWorkers)));
+    MSetRouteGroup retryGroup;
+    retryGroup.worker = survivor;
+    retryGroup.keys = group.keys;
+    retryGroup.values = group.values;
+    groups.emplace_back(std::move(retryGroup));
     return Status::OK();
 }
 
