@@ -9,13 +9,13 @@
 #include "datasystem/router_client.h"
 
 #include <algorithm>
-#include <chrono>
 #include <mutex>
 
-#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
+#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/repository/topology_repository.h"
 #include "datasystem/cluster/runtime/topology_observer.h"
-#include "datasystem/common/log/log.h"
+#include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
@@ -24,7 +24,6 @@
 namespace datasystem {
 namespace {
 constexpr size_t BATCH_MEMBER_LIMIT = 100;
-constexpr auto ROUTER_SHUTDOWN_BUDGET = std::chrono::seconds(5);
 
 void RotateRandomly(std::vector<std::string> &addresses, RandomData &random)
 {
@@ -36,9 +35,9 @@ void RotateRandomly(std::vector<std::string> &addresses, RandomData &random)
 }  // namespace
 
 struct RouterClient::Impl {
-    std::shared_ptr<EtcdStore> store;
+    std::unique_ptr<ICoordinatorServiceProxy> proxy;
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
-    std::unique_ptr<cluster::EtcdCoordinationBackend> backend;
+    std::unique_ptr<cluster::DsCoordinationBackend> backend;
     std::unique_ptr<cluster::TopologyRepository> repository;
     std::unique_ptr<cluster::TopologyReader> reader;
     std::unique_ptr<cluster::TopologyObserver> observer;
@@ -47,37 +46,12 @@ struct RouterClient::Impl {
     std::mutex randomMutex;
 };
 
-RouterClient::RouterClient(const std::string &azName, const std::string &etcdAddress, const SensitiveValue &etcdCa,
-                           const SensitiveValue &etcdCert, const SensitiveValue &etcdKey,
-                           const std::string &etcdDNSName)
-    : azName_(azName),
-      etcdAddress_(etcdAddress),
-      etcdCa_(etcdCa),
-      etcdCert_(etcdCert),
-      etcdKey_(etcdKey),
-      etcdDNSName_(etcdDNSName)
+RouterClient::RouterClient(const std::string &azName, const std::string &coordinatorAddress)
+    : azName_(azName), coordinatorAddress_(coordinatorAddress)
 {
 }
 
-RouterClient::~RouterClient()
-{
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
-    if (impl_ == nullptr) {
-        return;
-    }
-    if (impl_->observer != nullptr) {
-        auto rc = impl_->observer->Shutdown(std::chrono::steady_clock::now() + ROUTER_SHUTDOWN_BUDGET);
-        if (rc.IsError()) {
-            LOG(ERROR) << "RouterClient cannot safely destroy the cluster topology Observer: " << rc.ToString();
-            (void)impl_.release();
-            return;
-        }
-    }
-    if (impl_->backend != nullptr) {
-        (void)impl_->backend->ShutdownEventSources();
-        (void)impl_->backend->Shutdown();
-    }
-}
+RouterClient::~RouterClient() = default;
 
 Status RouterClient::Init()
 {
@@ -87,24 +61,23 @@ Status RouterClient::Init()
     }
     auto runtime = std::make_unique<Impl>();
     RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(azName_, runtime->keys));
-    runtime->store = std::make_shared<EtcdStore>(etcdAddress_, etcdCa_.GetData(), etcdCert_, etcdKey_, etcdDNSName_);
-    RETURN_IF_NOT_OK(runtime->store->Init());
-    RETURN_IF_NOT_OK(
-        runtime->store->CreateTableWithExactPrefix(runtime->keys->TopologyTable(), runtime->keys->TopologyTable()));
-    runtime->backend = std::make_unique<cluster::EtcdCoordinationBackend>(runtime->store.get());
+    auto discovery = std::make_shared<StaticCoordinatorDiscovery>(coordinatorAddress_);
+    runtime->proxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(discovery));
+    RETURN_IF_NOT_OK(runtime->proxy->Init());
+    runtime->backend = std::make_unique<cluster::DsCoordinationBackend>(runtime->proxy.get(), "");
     runtime->repository = std::make_unique<cluster::TopologyRepository>(*runtime->backend, *runtime->keys);
     runtime->reader = std::make_unique<cluster::TopologyReader>(*runtime->repository);
-    runtime->observer =
-        std::make_unique<cluster::TopologyObserver>(*runtime->backend, *runtime->reader, *runtime->keys);
+    runtime->observer = std::make_unique<cluster::TopologyObserver>(*runtime->reader, *runtime->keys);
     RETURN_IF_NOT_OK(runtime->observer->Start());
     impl_ = std::move(runtime);
+    initialized_.store(true, std::memory_order_release);
     return Status::OK();
 }
 
 Status RouterClient::GetWorkerCandidates(const std::string &targetHost, std::vector<std::string> &addresses) const
 {
     addresses.clear();
-    CHECK_FAIL_RETURN_STATUS(impl_ != nullptr && impl_->observer != nullptr, K_NOT_READY,
+    CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), K_NOT_READY,
                              "RouterClient cluster topology Observer is not initialized");
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(impl_->observer->GetSnapshot(snapshot));
@@ -140,7 +113,7 @@ Status RouterClient::GetWorkerAddrByWorkerId(const std::vector<std::string> &mem
                                  return id.size() == UUID_SIZE;
                              }),
                              K_INVALID, "RouterClient member id must be 16 binary bytes");
-    CHECK_FAIL_RETURN_STATUS(impl_ != nullptr && impl_->observer != nullptr, K_NOT_READY,
+    CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), K_NOT_READY,
                              "RouterClient cluster topology Observer is not initialized");
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(impl_->observer->GetSnapshot(snapshot));

@@ -23,37 +23,24 @@
 #include "common.h"
 #include "datasystem/client/cluster_query/cluster_query_client.h"
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
-#include "datasystem/common/flags/flags.h"
-#include "datasystem/common/encrypt/secret_manager.h"
 #include "client/object_cache/oc_client_common.h"
-#include "datasystem/common/eventloop/timer_queue.h"
-#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/coordination_keys.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/object_client.h"
-#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/router_client.h"
- 
-DS_DECLARE_string(cluster_name);
-DS_DECLARE_bool(enable_etcd_auth);
-DS_DECLARE_string(encrypt_kit);
-DS_DECLARE_string(secret_key1);
-DS_DECLARE_string(secret_key2);
-DS_DECLARE_string(secret_key3);
-DS_DECLARE_string(secret_salt);
-DS_DECLARE_string(etcd_address);
- 
+
 namespace datasystem {
 namespace st {
 constexpr size_t TOTAL_WORKER_NUM = 6;
-constexpr size_t ETCD_NUM = 2;
 constexpr uint32_t TOKENS_PER_MEMBER = 4;
 const std::string AZ1 = "AZ1";
-const uint32_t ETCD_TIME_OUT_SECOND = 5;
-const uint32_t EXTRA_WAIT_SECOND = 3;
+const uint32_t NODE_TIMEOUT_SECOND = 5;
+const uint32_t EXTRA_WAIT_SECOND = 10;
 
 std::vector<uint32_t> BuildMemberTokens(const std::string &address)
 {
@@ -69,52 +56,32 @@ class RouterClientTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.numEtcd = ETCD_NUM;
+        opts.numEtcd = 0;
+        opts.numCoordinators = 1;
         opts.numWorkers = TOTAL_WORKER_NUM;
-        std::string workerGflags =
-            "-v=1 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
-        opts.workerGflagParams = workerGflags;
- 
+        opts.workerGflagParams = "-node_timeout_s=" + std::to_string(NODE_TIMEOUT_SECOND);
+        opts.coordinatorGflagParams = "-node_timeout_s=3 -node_dead_timeout_s=6";
+        opts.waitWorkerReady = true;
+        opts.waitAfterStart = false;
     }
  
     void SetUp() override
     {
-        CommonTest::SetUp();
-        DS_ASSERT_OK(Init());
-        ASSERT_TRUE(cluster_ != nullptr);
-        DS_ASSERT_OK(cluster_->StartEtcdCluster());
-        DS_ASSERT_OK(cluster_->StartWorkers());
-        for (size_t i = 0; i < TOTAL_WORKER_NUM; i++) {
-            DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
-        }
-        InitEtcdAddress();
-        InitNodeAddress();
-    }
- 
-    void InitEtcdAddress()
-    {
-        for (size_t i = 0; i < cluster_->GetEtcdNum(); ++i) {
-            std::pair<HostPort, HostPort> addrs;
-            cluster_->GetEtcdAddrs(i, addrs);
-            if (!etcdAddress_.empty()) {
-                etcdAddress_ += ",";
+        OCClientCommon::SetUp();
+        auto &external = static_cast<ExternalCluster &>(*cluster_);
+        for (const auto &addr : external.GetExternalOptions().coordinatorConfigs) {
+            if (!coordinatorAddress_.empty()) {
+                coordinatorAddress_ += ",";
             }
-            etcdAddress_ += addrs.first.ToString();
+            coordinatorAddress_ += addr.ToString();
+        }
+        if (cluster_->GetWorkerNum() > 0) {
+            HostPort addr;
+            DS_ASSERT_OK(cluster_->GetWorkerAddr(0, addr));
+            localNodeAddress_ = addr.Host();
         }
     }
- 
-    void InitNodeAddress()
-    {
-        HostPort workerHostPort;
-        cluster_->GetWorkerAddr(0, workerHostPort);
-        localNodeAddress_ = workerHostPort.Host();
-    }
- 
-    std::string GetEtcdAddress()
-    {
-        return etcdAddress_;
-    }
- 
+
     std::string GetLocalNodeAddress()
     {
         return localNodeAddress_;
@@ -136,7 +103,7 @@ public:
  
     void SelectWorkerAndConnect(std::string azName, bool specifyNode, std::string *outAddr = nullptr)
     {
-        RouterClient routerClient(azName, etcdAddress_, "", "", "", "");
+        RouterClient routerClient(azName, coordinatorAddress_);
         DS_ASSERT_OK(routerClient.Init());
         std::vector<std::string> candidates;
         DS_ASSERT_OK(cluster_->WaitForExpectedResult(
@@ -156,7 +123,7 @@ public:
     }
  
 protected:
-    std::string etcdAddress_;
+    std::string coordinatorAddress_;
     std::string localNodeAddress_;
 };
 
@@ -164,24 +131,10 @@ class MembershipRecoveryQueryTest : public RouterClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.numEtcd = 1;
+        RouterClientTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 2;
-        opts.workerGflagParams =
-            "-v=1 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
-    }
-
-    void SetUp() override
-    {
-        CommonTest::SetUp();
-        DS_ASSERT_OK(Init());
-        ASSERT_NE(cluster_, nullptr);
-        DS_ASSERT_OK(cluster_->StartEtcdCluster());
-        DS_ASSERT_OK(cluster_->StartWorkers());
-        for (size_t workerIndex = 0; workerIndex < 2; ++workerIndex) {
-            DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, workerIndex));
-        }
-        InitEtcdAddress();
-        InitNodeAddress();
+        opts.numCoordinators = 3;
+        opts.enableCoordinatorElection = true;
     }
 
 protected:
@@ -218,7 +171,7 @@ protected:
     }
 };
 
-TEST_F(MembershipRecoveryQueryTest, EtcdLeaseRecreationConvergesBackToHealthy)
+TEST_F(MembershipRecoveryQueryTest, RoutesToRecoveredWorkerAfterCoordinatorFailover)
 {
     HostPort worker0;
     HostPort worker1;
@@ -228,37 +181,57 @@ TEST_F(MembershipRecoveryQueryTest, EtcdLeaseRecreationConvergesBackToHealthy)
 
     client::cluster_query::ClusterQueryOptions queryOptions;
     queryOptions.clusterName = GetTestClusterName();
-    queryOptions.etcdAddress = GetEtcdAddress();
+    queryOptions.coordinatorAddress = coordinatorAddress_;
     client::cluster_query::ClusterQueryClient queryClient(std::move(queryOptions));
     DS_ASSERT_OK(queryClient.Init());
     WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
 
-    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
-    ASSERT_NE(externalCluster, nullptr);
-    DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 1 }));
-    WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
-
-    DS_ASSERT_OK(externalCluster->ShutdownEtcds());
-    DS_ASSERT_OK(externalCluster->StartEtcdCluster());
-    WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
-
-    RouterClient routerClient(GetTestClusterName(), GetEtcdAddress(), "", "", "", "");
+    RouterClient routerClient(GetTestClusterName(), coordinatorAddress_);
     DS_ASSERT_OK(routerClient.Init());
+
+    auto &external = static_cast<ExternalCluster &>(*cluster_);
+    HostPort leader;
+    CoordinatorServiceProxyBrpcImpl probe(std::make_shared<StaticCoordinatorDiscovery>(coordinatorAddress_));
+    DS_ASSERT_OK(probe.Init());
+    DS_ASSERT_OK(probe.SetLeaderChangeHandler([&leader](const auto &identity) { leader = identity.address; }));
+    std::string originalId;
+    DS_ASSERT_OK(probe.GetCoordinatorId(originalId, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+    const auto coordinatorCount = external.GetExternalOptions().numCoordinators;
+    size_t leaderIndex = 0;
+    for (; leaderIndex < coordinatorCount; ++leaderIndex) {
+        HostPort address;
+        DS_ASSERT_OK(external.GetCoordinatorAddr(leaderIndex, address));
+        if (address == leader) {
+            break;
+        }
+    }
+    ASSERT_LT(leaderIndex, coordinatorCount);
+    DS_ASSERT_OK(cluster_->ShutdownNode(COORDINATOR, leaderIndex));
+    WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
+    std::string electedId;
+    DS_ASSERT_OK(probe.GetCoordinatorId(electedId, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+    ASSERT_NE(electedId, originalId);
+    DS_ASSERT_OK(external.RestartWorkerAndWaitReadyOneByOne({ 1 }));
+    WaitForExpectedWorkersHealthy(queryClient, expectedWorkers);
+
+    HostPort added(worker0.Host(), GetFreePort());
+    DS_ASSERT_OK(external.AddNode(added.ToString()));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2));
     std::vector<std::string> candidates;
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [&routerClient, &candidates, &worker1] {
+        [&routerClient, &candidates, &added, &worker1] {
             RETURN_IF_NOT_OK(routerClient.GetWorkerCandidates("", candidates));
-            return std::find(candidates.begin(), candidates.end(), worker1.ToString()) != candidates.end()
+            const std::set<std::string> active(candidates.begin(), candidates.end());
+            return active.count(added.ToString()) && active.count(worker1.ToString())
                        ? Status::OK()
-                       : Status(K_NOT_READY, "Recovered worker is not a routing candidate yet");
+                       : Status(K_NOT_READY, "Router has not observed the recovered and newly added workers");
         },
         30, K_OK));
-    EXPECT_NE(std::find(candidates.begin(), candidates.end(), worker1.ToString()), candidates.end());
 
     std::shared_ptr<ObjectClient> objectClient;
     InitTestClient(worker1.ToString(), objectClient);
     const std::string objectKey = "membership_recovery_smoke";
-    const std::string value = "healthy_after_etcd_lease_recreation";
+    const std::string value = "healthy_after_coordinator_failover";
     DS_ASSERT_OK(objectClient->Put(objectKey, reinterpret_cast<const uint8_t *>(value.data()), value.size(),
                                    CreateParam{}));
     std::vector<Optional<Buffer>> buffers;
@@ -268,11 +241,21 @@ TEST_F(MembershipRecoveryQueryTest, EtcdLeaseRecreationConvergesBackToHealthy)
     AssertBufferEqual(*buffers.front(), value);
 }
 
+TEST_F(RouterClientTest, RetriesAfterDiscoveryThreadStartFailure)
+{
+    RouterClient client(GetTestClusterName(), coordinatorAddress_);
+    constexpr char point[] = "CoordinatorDiscoveryCache.StartThread";
+    DS_ASSERT_OK(inject::Set(point, "1*call()"));
+    Raii clear([&] { (void)inject::Clear(point); });
+    ASSERT_EQ(client.Init().GetCode(), K_RUNTIME_ERROR);
+    DS_ASSERT_OK(client.Init());
+}
+
 TEST_F(RouterClientTest, TestInitInvalidAz)
 {
     std::string azName = "AZ3";
-    RouterClient client(azName, GetEtcdAddress(), "", "", "", "");
-    EXPECT_EQ(client.Init().GetCode(), K_NOT_FOUND);
+    RouterClient client(azName, coordinatorAddress_);
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([&client] { return client.Init(); }, EXTRA_WAIT_SECOND, K_NOT_FOUND));
 }
  
 TEST_F(RouterClientTest, TestSelectOneLocalNodeWorker)
@@ -289,34 +272,45 @@ TEST_F(RouterClientTest, TestRandomSelectWorker)
  
 TEST_F(RouterClientTest, DISABLED_LEVEL1_TestWorkerShutDownInitRouteAndRecovery)
 {
-    std::vector<int> az1Pos{ 0, 2, 4 };
-    for (auto &pos : az1Pos) {
-        DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, pos));
+    const std::vector<int> stopped{ 0, 2, 4 };
+    std::set<std::string> stoppedAddresses;
+    for (auto index : stopped) {
+        HostPort address;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(index, address));
+        stoppedAddresses.insert(address.ToString());
+        DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, index));
     }
-    sleep(ETCD_TIME_OUT_SECOND + EXTRA_WAIT_SECOND);
- 
-    std::string selectedWorkerAddr;
-    RouterClient client(GetTestClusterName(), GetEtcdAddress(), "", "", "", "");
+    RouterClient client(GetTestClusterName(), coordinatorAddress_);
     DS_ASSERT_OK(client.Init());
     std::vector<std::string> candidates;
-    DS_ASSERT_NOT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
- 
-    // restart az1
-    for (auto &pos : az1Pos) {
-        DS_ASSERT_OK(cluster_->StartNode(WORKER, pos, ""));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] {
+            RETURN_IF_NOT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
+            return std::none_of(candidates.begin(), candidates.end(), [&](const std::string &address) {
+                return stoppedAddresses.count(address) != 0;
+            }) ? Status::OK() : Status(K_NOT_READY, "Stopped worker is still a routing candidate");
+        },
+        30, K_OK));
+
+    for (auto index : stopped) {
+        DS_ASSERT_OK(cluster_->StartNode(WORKER, index, ""));
     }
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
- 
-    DS_ASSERT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
-    selectedWorkerAddr = candidates.front();
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] {
+            RETURN_IF_NOT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
+            return candidates.size() == TOTAL_WORKER_NUM ? Status::OK()
+                                                         : Status(K_NOT_READY, "Waiting for restarted workers");
+        },
+        30, K_OK));
     std::shared_ptr<ObjectClient> objectClient;
-    InitTestClient(selectedWorkerAddr, objectClient);
+    InitTestClient(candidates.front(), objectClient);
 }
  
 TEST_F(RouterClientTest, DISABLED_LEVEL1_TestInitRouteAndWorkerShutDownAndRecovery)
 {
     std::string selectedWorkerAddr;
-    RouterClient client(GetTestClusterName(), GetEtcdAddress(), "", "", "", "");
+    RouterClient client(GetTestClusterName(), coordinatorAddress_);
     DS_ASSERT_OK(client.Init());
     std::vector<std::string> candidates;
     DS_ASSERT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
@@ -339,11 +333,7 @@ class RouterClientIpv6Test : public RouterClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.numEtcd = ETCD_NUM;
-        opts.numWorkers = TOTAL_WORKER_NUM;
-        std::string workerGflags =
-            "-v=1 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
-        opts.workerGflagParams = workerGflags;
+        RouterClientTest::SetClusterSetupOptions(opts);
 
         // set the worker's address to IPv6
         opts.workerConfigs.clear();
@@ -379,59 +369,44 @@ class SimpleRouterClientTest : public RouterClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.numEtcd = ETCD_NUM;
+        RouterClientTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 0;
     }
  
     void SetUp() override
     {
-        CommonTest::SetUp();
-        DS_ASSERT_OK(Init());
-        ASSERT_TRUE(cluster_ != nullptr);
-        DS_ASSERT_OK(cluster_->StartEtcdCluster());
-        InitEtcdAddress();
+        RouterClientTest::SetUp();
+        std::unique_ptr<cluster::TopologyKeyHelper> keys;
+        DS_ASSERT_OK(cluster::TopologyKeyHelper::Create(AZ1, keys));
+        topologyKey_ = keys->TopologyTable() + "/" + keys->TopologyKey();
+        writer_ = std::make_unique<CoordinatorServiceProxyBrpcImpl>(
+            std::make_shared<StaticCoordinatorDiscovery>(coordinatorAddress_));
+        DS_ASSERT_OK(writer_->Init());
+        RouterClient missing(AZ1, coordinatorAddress_);
+        DS_ASSERT_OK(cluster_->WaitForExpectedResult([&missing] { return missing.Init(); }, EXTRA_WAIT_SECOND,
+                                                     K_NOT_FOUND));
     }
-};
- 
-TEST_F(SimpleRouterClientTest, DestrutClientWhenTimerExists)
-{
-    FLAGS_log_monitor = false;
-    ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
-    auto etcdStore = std::make_shared<EtcdStore>(etcdAddress_);
-    DS_ASSERT_OK(etcdStore->Init());
- 
-    DS_ASSERT_OK(RegisterTopologyTables(*etcdStore, AZ1));
-    ClusterTopologyPb topology;
-    topology.set_schema_version("2");
-    topology.set_cluster_has_init(true);
-    topology.set_version(1);
-    topology.set_tokens_per_member(TOKENS_PER_MEMBER);
-    auto &member = (*topology.mutable_members())["127.0.0.1:3000"];
-    member.set_id(std::string(16, 'a'));
-    member.set_state(MembershipPb::ACTIVE);
-    DS_ASSERT_OK(etcdStore->Put(GetTopologyTableName(AZ1), "", topology.SerializeAsString()));
-    DS_ASSERT_OK(inject::Set("worker.GenerateFakePutEventIfNeeded.timeout", "call(2000)"));
-    DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly", "call(100)"));
+
+    Status PutTopology(const cluster::TopologyState &topology)
     {
-        RouterClient client(AZ1, GetEtcdAddress(), "", "", "", "");
-        DS_ASSERT_OK(client.Init());
-        // generate event
-        topology.set_version(2);
-        DS_ASSERT_OK(etcdStore->Put(GetTopologyTableName(AZ1), "", topology.SerializeAsString()));
-        int waitShutdown = 1000;
-        std::this_thread::sleep_for(std::chrono::milliseconds(waitShutdown));
+        std::string bytes;
+        RETURN_IF_NOT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(topology, bytes));
+        int64_t version = 0;
+        int64_t revision = 0;
+        return writer_->Put(topologyKey_, bytes, 0, COORDINATOR_NO_VERSION_CHECK, version, revision);
     }
-    int waitTimerExecute = 2000;
-    std::this_thread::sleep_for(std::chrono::milliseconds(waitTimerExecute));
-}
+
+private:
+    std::string topologyKey_;
+    std::unique_ptr<ICoordinatorServiceProxy> writer_;
+};
 
 TEST_F(SimpleRouterClientTest, ReturnsOrderedTopologyCandidatesAndBinaryIdResolution)
 {
-    std::unique_ptr<cluster::TopologyKeyHelper> keys;
-    DS_ASSERT_OK(cluster::TopologyKeyHelper::Create(AZ1, keys));
-    auto store = std::make_shared<EtcdStore>(etcdAddress_);
-    DS_ASSERT_OK(store->Init());
-    DS_ASSERT_OK(store->CreateTableWithExactPrefix(keys->TopologyTable(), keys->TopologyTable()));
+    RouterClient invalid(AZ1, "");
+    EXPECT_EQ(invalid.Init().GetCode(), K_INVALID);
+    RouterClient client(AZ1, coordinatorAddress_);
+    EXPECT_EQ(client.Init().GetCode(), K_NOT_FOUND);
     cluster::TopologyState topology;
     topology.version = 1;
     topology.clusterHasInit = true;
@@ -443,10 +418,8 @@ TEST_F(SimpleRouterClientTest, ReturnsOrderedTopologyCandidatesAndBinaryIdResolu
                          BuildMemberTokens("127.0.0.2:3002") },
         cluster::Member{ { std::string(16, 'c'), "127.0.0.3:3003" }, cluster::MemberState::INITIAL, {} },
     };
-    std::string bytes;
-    DS_ASSERT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(topology, bytes));
-    DS_ASSERT_OK(store->Put(keys->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(), bytes));
-    RouterClient client(AZ1, GetEtcdAddress(), "", "", "", "");
+    DS_ASSERT_OK(PutTopology(topology));
+    DS_ASSERT_OK(client.Init());
     DS_ASSERT_OK(client.Init());
     std::vector<std::string> candidates;
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
@@ -459,81 +432,34 @@ TEST_F(SimpleRouterClientTest, ReturnsOrderedTopologyCandidatesAndBinaryIdResolu
     ASSERT_EQ(addresses.size(), 2);
     EXPECT_EQ(addresses.front(), "127.0.0.1:3001");
     EXPECT_TRUE(addresses.back().empty());
+    DS_ASSERT_OK(client.GetWorkerAddrByWorkerId({ std::string(16, 'c') }, addresses));
+    EXPECT_EQ(addresses, std::vector<std::string>({ "127.0.0.3:3003" }));
+    EXPECT_EQ(client.GetWorkerAddrByWorkerId({ "short" }, addresses).GetCode(), K_INVALID);
+    EXPECT_EQ(client.GetWorkerAddrByWorkerId({}, addresses).GetCode(), K_INVALID);
+    DS_ASSERT_OK(client.GetWorkerAddrByWorkerId(std::vector<std::string>(100, std::string(16, 'a')), addresses));
+    EXPECT_EQ(client.GetWorkerAddrByWorkerId(std::vector<std::string>(101, std::string(16, 'a')), addresses).GetCode(),
+              K_INVALID);
+    ++topology.version;
+    topology.members.clear();
+    DS_ASSERT_OK(PutTopology(topology));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([&] { return client.GetWorkerCandidates("", candidates); },
+                                                 EXTRA_WAIT_SECOND, K_NOT_FOUND));
+    EXPECT_TRUE(candidates.empty());
 }
  
-class RouterClientGetWorkerIdTest : public RouterClientTest {
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numEtcd = 1;
-    }
- 
-    void SetUp() override
-    {
-        CommonTest::SetUp();
-        DS_ASSERT_OK(Init());
-        ASSERT_TRUE(cluster_ != nullptr);
-        DS_ASSERT_OK(cluster_->StartEtcdCluster());
-        FLAGS_v = 1;
-        InitTestEtcdInstance();
-    }
- 
-    void InitTestEtcdInstance()
-    {
-        if (db_ != nullptr) {
-            return;
-        }
-        InitEtcdAddress();
-        FLAGS_etcd_address = etcdAddress_;
-        db_ = std::make_unique<EtcdStore>(etcdAddress_);
-        DS_ASSERT_OK(db_->Init());
-        (void)RegisterTopologyTables(*db_, AZ1);
-        ClusterTopologyPb ring;
-        ring.set_schema_version("2");
-        ring.set_version(1);
-        ring.set_tokens_per_member(TOKENS_PER_MEMBER);
-        DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString()));
-    }
- 
-protected:
-    void InsertWorkerToDb(std::pair<std::string, std::string> p)
-    {
-        std::string hashRingStr;
-        DS_ASSERT_OK(db_->Get(GetTopologyTableName(AZ1), "", hashRingStr));
-        ClusterTopologyPb ring;
-        ASSERT_TRUE(ring.ParseFromString(hashRingStr));
-        MembershipPb wpb;
-        wpb.set_id(p.second);
-        wpb.set_state(MembershipPb::ACTIVE);
-        ring.mutable_members()->insert({ p.first, wpb });
-        ring.set_version(ring.version() + 1);
-        DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString()));
-    };
- 
-    void DelWorkerFromDb(std::string workerAddr)
-    {
-        std::string hashRingStr;
-        DS_ASSERT_OK(db_->Get(GetTopologyTableName(AZ1), "", hashRingStr));
-        ClusterTopologyPb ring;
-        ASSERT_TRUE(ring.ParseFromString(hashRingStr));
-        auto it = ring.mutable_members()->find(workerAddr);
-        ring.mutable_members()->erase(it);
-        ring.set_version(ring.version() + 1);
-        int64_t version{};
-        DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString(), &version));
-    };
- 
-    std::unique_ptr<EtcdStore> db_;
-};
- 
-TEST_F(RouterClientGetWorkerIdTest, NormalGetWorker)
+TEST_F(SimpleRouterClientTest, NormalGetWorker)
 {
     auto alreadyExist = std::make_pair("127.0.0.1:1", std::string(16, 'a'));
     const std::string unknownId(16, 'x');
-    InsertWorkerToDb(alreadyExist);
- 
-    RouterClient routerClient(AZ1, etcdAddress_, "", "", "", "");
+    cluster::TopologyState topology;
+    topology.version = 1;
+    topology.tokensPerMember = TOKENS_PER_MEMBER;
+    topology.members.push_back({ { alreadyExist.second, alreadyExist.first }, cluster::MemberState::ACTIVE,
+                                 BuildMemberTokens(alreadyExist.first) });
+    DS_ASSERT_OK(PutTopology(topology));
+    RouterClient routerClient(AZ1, coordinatorAddress_);
     DS_ASSERT_OK(routerClient.Init());
- 
+
     // not exist
     std::vector<std::string> result;
     DS_ASSERT_NOT_OK(routerClient.GetWorkerAddrByWorkerId({ unknownId }, result));
@@ -551,7 +477,10 @@ TEST_F(RouterClientGetWorkerIdTest, NormalGetWorker)
  
     // newly-added
     auto newlyAdd = std::make_pair("127.0.0.1:2", std::string(16, 'b'));
-    InsertWorkerToDb(newlyAdd);
+    ++topology.version;
+    topology.members.push_back({ { newlyAdd.second, newlyAdd.first }, cluster::MemberState::ACTIVE,
+                                 BuildMemberTokens(newlyAdd.first) });
+    DS_ASSERT_OK(PutTopology(topology));
     result.clear();
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
         [&routerClient, &newlyAdd, &result]() {
@@ -580,7 +509,9 @@ TEST_F(RouterClientGetWorkerIdTest, NormalGetWorker)
     ASSERT_TRUE(result[i++] == newlyAdd.first);
  
     // cannot be found after delete
-    DelWorkerFromDb(alreadyExist.first);
+    ++topology.version;
+    topology.members.erase(topology.members.begin());
+    DS_ASSERT_OK(PutTopology(topology));
     result.clear();
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
         [&routerClient, &alreadyExist, &result]() {

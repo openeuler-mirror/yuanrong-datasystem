@@ -197,8 +197,8 @@
   Snapshot. RESET, DELETE, empty or malformed payloads, stale authority identity, version rollback, and digest conflict
   retain the last-good Snapshot and use the existing exact-read fallback, whose repeated conflict still isolates the
   role. Unified ETCD Worker events and local notify events remain exact-read doorbells. Coordinator Host keeps Store
-  mutations as RESET doorbells, so its Controller continues exact-reading Store facts. Observer watches exact topology
-  only.
+  mutations as RESET doorbells, so its Controller continues exact-reading Store facts. The standalone Router Observer
+  conditionally polls the exact Coordinator topology key and retains its last valid snapshot on read failure.
 - After a Worker has an authoritative topology Snapshot, subsequent exact reads send its `AuthorityRevision` as
   `known_mod_revision`. Coordinator compares that token with the topology key's modification revision and returns
   `unchanged=true` without the topology value when they match. Revision zero keeps exact and prefix Range behavior
@@ -357,8 +357,8 @@
 
   | Keyword | Main source | Trigger and useful fields |
   | --- | --- | --- |
-  | `CLUSTER_WATCH` | Controller/Worker/Observer loops | watch registration, resync, or fatal watch exits; includes role/scope/status. |
-  | `CLUSTER_WATCH_EVENT` | Controller/Worker/Observer watch callbacks | topology, membership, task, notify, or observer watch ingress; includes action/revision/key. |
+  | `CLUSTER_WATCH` | Controller/Worker loops | watch registration, resync, or fatal watch exits; includes role/scope/status. |
+  | `CLUSTER_WATCH_EVENT` | Controller/Worker watch callbacks | topology, membership, task, or notify watch ingress; includes action/revision/key. |
   | `CLUSTER_WATCH_QUEUE` | `CoordinationEventDispatcher` | queued event overflow/coalescing and reset doorbells; includes event counters and depth. |
   | `CLUSTER_MEMBERSHIP` | Controller membership reconciliation | membership read failures or per-cycle membership summary; includes version and member counts. |
   | `CLUSTER_MEMBERSHIP_OBSERVED` | Controller membership reconciliation | changed membership digest/sample after membership watch dirties state. |
@@ -649,7 +649,7 @@
 - Coordinator composition: `src/datasystem/coordinator/coordinator_service_impl.{h,cpp}`
 - Worker composition: `src/datasystem/worker/data_worker.cpp`, `src/datasystem/worker/worker_oc_server.cpp`
 - Worker metadata routing adapter: `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
-- Standalone observer consumer: `src/datasystem/client/router_client.cpp`
+- Standalone observer (Coordinator conditional polling) consumer: `src/datasystem/client/router_client.cpp`
 - Read-only operator query: `src/datasystem/client/cluster_query/*` and
   `src/datasystem/coordinator/coordinator_service_impl.cpp`
 
@@ -719,10 +719,8 @@
   permanently starve later stale records; the current implementation still uses full-table `GetAll` before applying the
   bounded page and does not claim 10K-table scan efficiency.
 - Background reconciliation must remain resource bounded and must always converge to a state that permits a later batch.
-- Topology Engine and Observer watch-registration logs identify `start_mode` (`from_now` or `after_revision`) and
-  `last_processed_revision` (`none` or the numeric revision). Observer keeps its existing revision-zero watch behavior
-  and reports `start_mode=after_revision last_processed_revision=0`; logs must not imply revision zero for every
-  backend.
+- Topology Engine watch-registration logs identify `start_mode` (`from_now` or `after_revision`) and
+  `last_processed_revision` (`none` or the numeric revision).
 - Coordinator-backed Worker topology watches set `skip_initial_kvs`; registration establishes the current revision
   boundary without materializing the snapshot. The post-registration `RESET` retains conditional topology/notify
   reconciliation, including rewatch gaps. Membership, notify, and probe watches retain their initial snapshots.

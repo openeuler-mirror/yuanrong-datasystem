@@ -720,7 +720,9 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   - client sources build both `datasystem_static` and `datasystem` shared library
   - `cluster_query_client` is a separate internal static target from `src/datasystem/client/cluster_query`; CMake and
     Bazel link it into `ds_client_py`/`libds_client_py` without appending its sources to `CLIENT_SRCS`.
-  - `ds_router_client` is a separate client-facing library built from `router_client.cpp`
+  - `ds_router_client` is a separate client-facing library built from `router_client.cpp`. Its two-argument constructor takes the AZ
+    and Coordinator endpoints. Init reads one exact topology key, then the observer polls by key modification revision
+    and Coordinator identity. Both route queries use the last successfully published in-process snapshot.
   - Python bindings are built from `src/datasystem/pybind_api` when Python API build is enabled; for Bazel wheel builds on `0.8.2`, `libds_client_py` must link from its own deps instead of `dynamic_deps = ["//:datasystem"]`, otherwise the installed wheel can fail at import time with unresolved Abseil log symbols.
   - transfer engine is only added from the root build when transfer-engine, hetero, and NPU-related conditions are satisfied
   - client transport sources are listed explicitly in both `src/datasystem/client/BUILD.bazel` and
