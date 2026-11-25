@@ -17,19 +17,15 @@
 set -e
 
 CMAKE_FILES_L0=(
-  "cjson.cmake"
   "absl.cmake"
-  "iconv.cmake"
   "jemalloc.cmake"
   "libzmq.cmake"
   "nlohmann_json.cmake"
   "openssl.cmake"
-  "pcre.cmake"
   "rocksdb.cmake"
   "securec.cmake"
   "spdlog.cmake"
   "tbb.cmake"
-  "xml2.cmake"
   "zlib.cmake"
   )
 

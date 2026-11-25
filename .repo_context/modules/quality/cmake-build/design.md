@@ -126,10 +126,6 @@
 | protobuf | `3.25.5`, found as `25.5.0` config | always | Generates project proto and etcd proto sources. |
 | c-ares | `1.19.1` | gRPC build | Built inside `grpc.cmake`. |
 | gRPC | `1.65.4` | always | Uses package providers for protobuf, absl, c-ares, re2, OpenSSL, zlib; applies GCC 7.3 patch. |
-| libiconv | `1.15` | always | Packaged into SDK/service libs. |
-| libxml2 | `2.9.12` | always | Packaged into SDK/service libs. |
-| PCRE | `8.45` | always | Packaged into SDK/service libs. |
-| cJSON | `1.7.17` | always | Packaged into service/SDK libs. |
 | spdlog | `1.12.0` | always | Built as `libds-spdlog.so`. |
 | GTest | `1.12.1` | `WITH_TESTS=on` | Required for C++ test targets and CTest registration. |
 | pybind11 | `2.10.3` | `BUILD_PYTHON_API=on` | Finds Python3 interpreter/development and builds `ds_client_py`. |
@@ -147,8 +143,8 @@
 - Main CMake includes dependencies sequentially through `cmake/dependency.cmake`.
 - With CMake `>= 3.28`, `scripts/build_thirdparty.sh` prebuilds common third-party libraries in parallel before main
   configure:
-  - L0: `cjson`, `absl`, `iconv`, `jemalloc`, `libzmq`, `nlohmann_json`, `openssl`, `pcre`, `rocksdb`, `securec`,
-    `spdlog`, `tbb`, `xml2`, `zlib`, plus optional `gtest`, `pybind11`, `ascend`.
+  - L0: `absl`, `jemalloc`, `libzmq`, `nlohmann_json`, `openssl`, `rocksdb`, `securec`,
+    `spdlog`, `tbb`, `zlib`, plus optional `gtest`, `pybind11`, `ascend`.
   - L1: `re2`, `protobuf`, `libcurl`, `grpc`.
   - L1 dependencies are explicitly tracked as `re2:absl`, `protobuf:absl`, `libcurl:openssl`,
     `grpc:protobuf:openssl:zlib:re2`.
