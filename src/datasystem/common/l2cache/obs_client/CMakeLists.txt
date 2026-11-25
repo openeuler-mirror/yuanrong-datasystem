@@ -12,9 +12,7 @@ set(OBS_LIBS
         common_encrypt_client
         nlohmann_json::nlohmann_json
         OpenSSL::SSL
-        OpenSSL::Crypto
-        ${PCRE}
-        ${ICONV})
+        OpenSSL::Crypto)
 
 add_library(common_obs STATIC ${OBS_SRCS})
 target_link_libraries(common_obs PUBLIC ${OBS_LIBS})

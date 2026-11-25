@@ -126,9 +126,7 @@ yr/datasystem/lib/libetcdapi_proto.so
 yr/datasystem/lib/libgpr.so.42
 yr/datasystem/lib/libgrpc++.so.1.65
 yr/datasystem/lib/libgrpc.so.42
-yr/datasystem/lib/libiconv.so.2
 yr/datasystem/lib/libjemalloc.so.2
-yr/datasystem/lib/libpcre.so.1
 yr/datasystem/lib/libprotobuf.so.25.5.0
 yr/datasystem/lib/librpc_option_protos.so
 yr/datasystem/lib/libsecurec.so
