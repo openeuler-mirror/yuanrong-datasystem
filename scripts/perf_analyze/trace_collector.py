@@ -13,6 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Description: Extract error or slow-request trace IDs and collect their related client and worker log
+#   evidence.
+# Usage: python3 scripts/perf_analyze/trace_collector.py -f logs --type all-core; use --help for core,
+#   percentile, and time-buckets modes.
+
 """
 trace_collector.py - Unified trace collection tool for scripts/perf_analyze.
 
@@ -23,10 +28,11 @@ Supports four modes:
   4. all-core: Extract traces for every non-zero access-log status code, then search in parallel.
 
 Directory layout:
-  Place this script beside collected/ and collected_worker_logs/.
+  Pass the collection root with -f. Standard collected/ and
+  collected_worker_logs/ layouts are discovered automatically. For mixed
+  second-level collections, use -p to select directories by prefix.
 
-  /parent/                         # Script directory
-  |-- trace_collector.py            # This script
+  /parent/                         # -f root directory
   |-- unique_traces_*.txt           # Generated trace files
   |-- collected/                    # Client logs used to extract traces
   |   |-- client-worker/
@@ -44,6 +50,9 @@ Directory layout:
       `-- percentile/               # Percentile-mode results
 
 Examples:
+  # mixed second-level collections selected by prefix
+  python3 trace_collector.py -f /path/to/rootDir -p jingpai --type all-core
+
   # core mode: extract traces by search string
   python3 trace_collector.py --type core "| 1001 | DS"
   python3 trace_collector.py --type core "| 1001 | DS:| 1002 | DS"
@@ -70,10 +79,137 @@ import random
 import math
 import argparse
 import gzip
+import multiprocessing
 import time
 import shlex
+import json
+import io
+import tarfile
+import tempfile
+import atexit
+import shutil
+import shlex
+import base64
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+
+
+def cross_log(message):
+    print(f'[{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}.{int(time.time() * 1000) % 1000:03d}] [cross-node] {message}', file=sys.stderr, flush=True)
+
+
+def tree_bytes(root):
+    return sum(os.path.getsize(os.path.join(directory, name))
+               for directory, _, names in os.walk(root) for name in names)
+
+
+def archive_command(root, prefix=None):
+    parent, name = os.path.dirname(root), os.path.basename(root)
+    find_expr = "-type f \\( -name '*.log' -o -name '*.log.*' -o -name '*.gz' -o -iname '*INFO*' -o -iname '*metrics*' \\)"
+    scope = (f"find {shlex.quote(name)} -mindepth 1 -maxdepth 1 -type d -name {shlex.quote(prefix + '*')} -exec find {{}} {find_expr} -print0 \\;" if prefix else
+             f"find {shlex.quote(name)} \\( -path '*/collected' -o -path '*/collected_worker_logs' \\) -type d -exec find {{}} {find_expr} -print0 \\;")
+    return (f"cd -- {shlex.quote(parent)} && {scope} | "
+            "tar --null --files-from=- -I 'gzip -1' -cf -")
+
+
+def prefilter_archive_command(root, prefix, patterns):
+    """Build a remote command that filters client traces before transfer."""
+    script = '''import gzip,json,pathlib,sys,tempfile,tarfile,shutil
+root=pathlib.Path(sys.argv[1]).resolve(); prefix=sys.argv[2] or None; needles=json.loads(sys.argv[3])
+scopes=[x for x in root.iterdir() if x.is_dir() and (prefix is None or x.name.startswith(prefix))]
+if prefix is None:
+    scopes=[x for x in (root/'collected',root/'collected_worker_logs') if x.is_dir()] or scopes
+def read(path):
+    opener=gzip.open if path.name.endswith('.gz') else open
+    with opener(path,'rt',encoding='utf-8',errors='replace') as stream:
+        yield from stream
+clients=[]; workers=[]
+for scope in scopes:
+    for path in scope.rglob('*.log*'):
+        if path.is_file():
+            name=path.name.lower()
+            if name.startswith('ds_client_access'): clients.append(path)
+            elif name.startswith('access') and not name.startswith('ds_client_access'): workers.append(path)
+traces=set()
+for path in clients:
+    for line in read(path):
+        if any(x in line for x in needles):
+            fields=line.split('|')
+            if len(fields)>5 and fields[5].strip(): traces.add(fields[5].strip())
+out=pathlib.Path(tempfile.mkdtemp(prefix='perf_trace_bundle_'))/root.name
+(out/'collected'/'client').mkdir(parents=True); (out/'collected_worker_logs'/'worker').mkdir(parents=True)
+def write_matches(paths,target):
+    with target.open('w',encoding='utf-8') as stream:
+        for path in paths:
+            for line in read(path):
+                if any(trace in line for trace in traces): stream.write(line)
+write_matches(clients,out/'collected'/'client'/'ds_client_access.log')
+write_matches(workers,out/'collected_worker_logs'/'worker'/'access.log')
+write_matches(clients+workers,out/'collected'/'client'/'matched.INFO.log')
+write_matches(clients+workers,out/'collected_worker_logs'/'worker'/'matched.INFO.log')
+with tarfile.open(fileobj=sys.stdout.buffer,mode='w|gz',compresslevel=1) as archive: archive.add(out,arcname=root.name)
+shutil.rmtree(out.parent,ignore_errors=True)
+'''
+    encoded = base64.b64encode(script.encode()).decode()
+    return 'python3 -c "import base64;exec(base64.b64decode({}))" {} {} {}'.format(
+        shlex.quote(repr(encoded)), shlex.quote(os.path.abspath(root)), shlex.quote(prefix or ''),
+        shlex.quote(json.dumps(list(patterns), separators=(',', ':'))))
+
+
+def stage_cross_node(root_dir: str, jobs: int, prefix=None, prefilter_patterns=None) -> str:
+    root = os.path.abspath(os.path.expanduser(root_dir))
+    started = time.monotonic()
+    cross_log(f'phase=discover_nodes enter root={root} jobs={jobs}')
+    payload = json.loads(subprocess.check_output(['kubectl', 'get', 'nodes', '-o', 'json'], text=True))
+    targets = []
+    for item in payload.get('items', []):
+        ip = next((entry.get('address') for entry in item.get('status', {}).get('addresses', [])
+                   if entry.get('type') == 'InternalIP'), None)
+        if ip:
+            targets.append((item.get('metadata', {}).get('name') or ip, ip))
+    if not targets:
+        raise RuntimeError('kubectl returned no nodes with InternalIP')
+    cross_log(f'phase=discover_nodes leave nodes={len(targets)} elapsed={time.monotonic() - started:.3f}s targets={targets}')
+    stage = tempfile.mkdtemp(prefix='perf_analyze_cross_node_')
+    atexit.register(shutil.rmtree, stage, ignore_errors=True)
+    cross_log(f'phase=stage_created path={stage} staged_bytes={tree_bytes(stage)}')
+    marker = os.path.join(stage, '.cross_node_roots')
+    with open(marker, 'w', encoding='utf-8') as stream:
+        json.dump([], stream)
+    def fetch(target):
+        node, ip = target
+        fetch_started = time.monotonic()
+        cross_log(f'node={node} phase=ssh_tar enter ip={ip}')
+        command = (prefilter_archive_command(root, prefix, prefilter_patterns)
+                   if prefilter_patterns else archive_command(root, prefix))
+        result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', f'root@{ip}', command],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if result.returncode:
+            return node, False, result.stderr.decode(errors='replace').strip(), time.monotonic() - fetch_started
+        destination = os.path.join(stage, re.sub(r'[^A-Za-z0-9_.-]+', '_', node))
+        os.makedirs(destination, exist_ok=True)
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r:gz') as archive:
+            archive.extractall(destination, filter='data')
+        return node, True, destination, len(result.stdout), tree_bytes(destination), time.monotonic() - fetch_started
+    failures = 0
+    with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(targets)))) as pool:
+        for future in as_completed([pool.submit(fetch, target) for target in targets]):
+            node, ok, value, *extra = future.result()
+            if not ok:
+                failures += 1
+                cross_log(f'node={node} phase=ssh_tar leave status=failed elapsed={extra[0]:.3f}s error={value}')
+            else:
+                cross_log(f'node={node} phase=ssh_tar leave status=ok elapsed={extra[2]:.3f}s transfer_bytes={extra[0]} staged_bytes={extra[1]} stage={value}')
+                with open(marker, 'r+', encoding='utf-8') as stream:
+                    roots = json.load(stream)
+                    roots.append(os.path.join(value, name))
+                    stream.seek(0)
+                    json.dump(roots, stream)
+                    stream.truncate()
+    if failures == len(targets):
+        raise RuntimeError('all cross-node fetches failed')
+    cross_log(f'phase=stage leave status=ok elapsed={time.monotonic() - started:.3f}s stage={stage} staged_bytes={tree_bytes(stage)} succeeded={len(targets) - failures} failed={failures}')
+    return stage
 
 
 DEFAULT_MAX_TRACES = 96
@@ -275,10 +411,12 @@ def limit_traces(traces: list, max_traces: int) -> list:
 def find_access_log_files(collected_dir: str) -> list:
     """Return current and rotated client access logs under collected_dir."""
     access_files = []
-    for root, _, files in os.walk(collected_dir):
-        for filename in files:
-            if CLIENT_ACCESS_LOG_RE.fullmatch(filename):
-                access_files.append(os.path.join(root, filename))
+    roots = collected_dir if isinstance(collected_dir, (list, tuple, set)) else [collected_dir]
+    for scan_root in roots:
+        for root, _, files in os.walk(scan_root):
+            for filename in files:
+                if CLIENT_ACCESS_LOG_RE.fullmatch(filename):
+                    access_files.append(os.path.join(root, filename))
     return sorted(access_files)
 
 
@@ -297,42 +435,147 @@ def grep_line_content(line: str) -> str:
 def find_files(root_dir: str, predicate) -> list:
     """Return files below root_dir matching predicate, in stable order."""
     found = []
-    for root, _, files in os.walk(root_dir):
-        found.extend(os.path.join(root, name) for name in files if predicate(name))
+    roots = root_dir if isinstance(root_dir, (list, tuple, set)) else [root_dir]
+    for scan_root in roots:
+        for root, _, files in os.walk(scan_root):
+            found.extend(os.path.join(root, name) for name in files if predicate(name))
     return sorted(found)
 
 
-def collect_bucket_traces(ops: list, ranges: list, collected_dir: str) -> dict:
-    """Read client access logs once and return buckets, source directories, and matched access lines."""
-    access_files = find_access_log_files(collected_dir)
+def discover_log_roots(root_dir: str, prefix: str = None) -> tuple:
+    """Return client and worker log directories below one collection root."""
+    base = os.path.abspath(os.path.expanduser(root_dir))
+    if not os.path.isdir(base):
+        raise ValueError(f"input directory does not exist: {base}")
+    marker = os.path.join(base, '.cross_node_roots')
+    if os.path.isfile(marker):
+        clients, workers = [], []
+        with open(marker, encoding='utf-8') as stream:
+            roots = json.load(stream)
+        for node_root in roots:
+            node_clients, node_workers = discover_log_roots(node_root, prefix)
+            clients.extend(node_clients)
+            workers.extend(node_workers)
+        return sorted(set(clients)), sorted(set(workers))
+    if prefix is None:
+        client_root = os.path.join(base, 'collected')
+        worker_root = os.path.join(base, 'collected_worker_logs')
+        if os.path.isdir(client_root) or os.path.isdir(worker_root):
+            return ([client_root] if os.path.isdir(client_root) else [],
+                    [worker_root] if os.path.isdir(worker_root) else [])
+    scopes = sorted(os.path.join(base, name) for name in os.listdir(base)
+                    if os.path.isdir(os.path.join(base, name)) and
+                    (prefix is None or name.startswith(prefix)))
+    if prefix is not None and not scopes:
+        raise ValueError(f"no second-level directory under {base} starts with {prefix!r}")
+    clients, workers = set(), set()
+    for scope in scopes:
+        for directory, _, filenames in os.walk(scope):
+            names = [name.lower() for name in filenames]
+            if any(name.startswith('ds_client_access') and name.endswith(('.log', '.log.gz')) for name in names):
+                clients.add(directory)
+            if any(name.startswith('access') and not name.startswith('ds_client_access') and
+                   name.endswith(('.log', '.log.gz')) for name in names):
+                workers.add(directory)
+    return sorted(clients), sorted(workers)
+
+
+def _scan_bucket_access_file(filepath: str, ops: list, ranges: list) -> tuple:
     bucket_traces = {(op, label): set() for op in ops for _, label, _ in ranges}
     trace_client_dirs = defaultdict(set)
     access_lines = defaultdict(list)
-    for filepath in access_files:
-        try:
-            with open_access_log(filepath) as stream:
-                source_dir = os.path.dirname(filepath)
-                for line_no, line in enumerate(stream, 1):
-                    op = next((candidate for candidate in ops if candidate in line), None)
-                    if op is None:
-                        continue
-                    parts = line.split('|')
-                    if len(parts) < 10:
-                        continue
-                    try:
-                        value = float(parts[9].strip())
-                    except ValueError:
-                        continue
-                    trace = extract_trace_id(line)
-                    if not trace:
-                        continue
-                    for _, label, time_range in ranges:
-                        if check_time_value(value, time_range):
-                            bucket_traces[(op, label)].add(trace)
-                            trace_client_dirs[trace].add(source_dir)
-                            access_lines[trace].append(f"{filepath}:{line_no}:{line}")
-        except Exception as exc:
-            print(f"  [SKIPPED] {os.path.basename(filepath)}: {exc}")
+    try:
+        with open_access_log(filepath) as stream:
+            source_dir = os.path.dirname(filepath)
+            for line_no, line in enumerate(stream, 1):
+                op = next((candidate for candidate in ops if candidate in line), None)
+                if op is None:
+                    continue
+                parts = line.split('|')
+                if len(parts) < 10:
+                    continue
+                try:
+                    value = float(parts[9].strip())
+                except ValueError:
+                    continue
+                trace = extract_trace_id(line)
+                if not trace:
+                    continue
+                for _, label, time_range in ranges:
+                    if check_time_value(value, time_range):
+                        bucket_traces[(op, label)].add(trace)
+                        trace_client_dirs[trace].add(source_dir)
+                        access_lines[trace].append(f"{filepath}:{line_no}:{line}")
+    except Exception as exc:
+        return filepath, None, None, None, str(exc)
+    return filepath, bucket_traces, trace_client_dirs, access_lines, None
+
+
+def _scan_status_access_file(filepath: str) -> tuple:
+    traces_by_code = defaultdict(set)
+    trace_client_dirs = defaultdict(set)
+    access_lines = defaultdict(list)
+    try:
+        with open_access_log(filepath) as stream:
+            for line_no, line in enumerate(stream, 1):
+                match = ACCESS_STATUS_CODE_RE.search(line)
+                if match is None:
+                    continue
+                code = match.group(1)
+                if int(code) == 0:
+                    continue
+                trace = extract_trace_id(line)
+                if trace:
+                    traces_by_code[code].add(trace)
+                    trace_client_dirs[trace].add(os.path.dirname(filepath))
+                    access_lines[trace].append(f"{filepath}:{line_no}:{line}")
+    except Exception as exc:
+        return filepath, None, None, None, str(exc)
+    return filepath, traces_by_code, trace_client_dirs, access_lines, None
+
+
+def _merge_access_scan_results(results: list) -> tuple:
+    first_success = next((result for result in results if result[4] is None), None)
+    bucket_traces = {key: set() for key in first_success[1]} if first_success else {}
+    trace_client_dirs = defaultdict(set)
+    access_lines = defaultdict(list)
+    for filepath, buckets, dirs, lines, error in results:
+        if error:
+            print(f"  [SKIPPED] {os.path.basename(filepath)}: {error}", flush=True)
+            continue
+        for key, traces in buckets.items():
+            bucket_traces.setdefault(key, set()).update(traces)
+        for trace, values in dirs.items():
+            trace_client_dirs[trace].update(values)
+        for trace, values in lines.items():
+            access_lines[trace].extend(values)
+    return bucket_traces, trace_client_dirs, access_lines
+
+
+def _collect_access_files(access_files: list, scan_function, scan_args: tuple, jobs: int) -> list:
+    if not access_files:
+        return []
+    workers = min(jobs, len(access_files))
+    print(f"  Scanning {len(access_files)} access logs with up to {workers} processes", flush=True)
+    results = []
+    started = time.monotonic()
+    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('fork')) as executor:
+        futures = [executor.submit(scan_function, filepath, *scan_args) for filepath in access_files]
+        for index, future in enumerate(as_completed(futures), 1):
+            results.append(future.result())
+            if index == 1 or index % 10 == 0 or index == len(access_files):
+                print(f"  [{time.strftime('%H:%M:%S')}] access logs: {index}/{len(access_files)} files, "
+                      f"{time.monotonic() - started:.1f}s", flush=True)
+    return results
+
+
+def collect_bucket_traces(ops: list, ranges: list, collected_dir: str, jobs: int = 1) -> dict:
+    """Read client access logs in parallel by file and merge their results."""
+    access_files = find_access_log_files(collected_dir)
+    if not access_files:
+        return {(op, label): set() for op in ops for _, label, _ in ranges}, defaultdict(set), defaultdict(list)
+    results = _collect_access_files(access_files, _scan_bucket_access_file, (ops, ranges), jobs)
+    bucket_traces, trace_client_dirs, access_lines = _merge_access_scan_results(results)
     return bucket_traces, trace_client_dirs, access_lines
 
 
@@ -449,7 +692,7 @@ def process_time_buckets(ops: list, range_values: list, collected_dir: str, logs
                          debug_search: bool = False) -> None:
     """Collect multiple latency buckets with one access and one targeted log scan."""
     ranges = parse_bucket_specs(range_values)
-    bucket_traces, trace_client_dirs, access_lines = collect_bucket_traces(ops, ranges, collected_dir)
+    bucket_traces, trace_client_dirs, access_lines = collect_bucket_traces(ops, ranges, collected_dir, jobs)
     selected = {}
     for key, traces in bucket_traces.items():
         selected[key] = limit_traces(sorted(traces), max_traces)
@@ -540,13 +783,13 @@ def process_core(search_core: str, collected_dir: str, logs_dir: str, base_outpu
     print(f"  Wrote trace file: {trace_file}")
 
     # Step 3: Search in parallel.
-    search_dirs = [collected_dir, logs_dir]
+    search_dirs = list(collected_dir) + list(logs_dir)
     search_traces(traces, search_dirs, output_dir, jobs, debug_search)
 
     print(f"  Search string '{search_core}' complete, results: {output_dir}/")
 
 
-def extract_traces_by_status_code(collected_dir: str) -> dict:
+def extract_traces_by_status_code(collected_dir: str, jobs: int = 1) -> dict:
     """Extract status-code traces, client directories, and original access lines in one pass."""
     access_files = find_access_log_files(collected_dir)
     if not access_files:
@@ -554,26 +797,8 @@ def extract_traces_by_status_code(collected_dir: str) -> dict:
         return {}, defaultdict(set), defaultdict(list)
 
     print(f"  Found {len(access_files)} access logs")
-    traces_by_code = {}
-    trace_client_dirs = defaultdict(set)
-    access_lines = defaultdict(list)
-    for filepath in access_files:
-        try:
-            with open_access_log(filepath) as f:
-                for line_no, line in enumerate(f, 1):
-                    match = ACCESS_STATUS_CODE_RE.search(line)
-                    if match is None:
-                        continue
-                    code = match.group(1)
-                    if int(code) == 0:
-                        continue
-                    trace = extract_trace_id(line)
-                    if trace:
-                        traces_by_code.setdefault(code, set()).add(trace)
-                        trace_client_dirs[trace].add(os.path.dirname(filepath))
-                        access_lines[trace].append(f"{filepath}:{line_no}:{line}")
-        except Exception as e:
-            print(f"  [SKIPPED] {os.path.basename(filepath)}: {e}")
+    results = _collect_access_files(access_files, _scan_status_access_file, (), jobs)
+    traces_by_code, trace_client_dirs, access_lines = _merge_access_scan_results(results)
 
     print(f"  Extracted {len(traces_by_code)} non-zero status codes")
     return traces_by_code, trace_client_dirs, access_lines
@@ -586,7 +811,7 @@ def process_all_core(collected_dir: str, logs_dir: str, base_output_dir: str, tr
     print("[all-core mode] Extracting all non-zero access-log status codes")
     print(f"{'='*60}")
     os.makedirs(base_output_dir, exist_ok=True)
-    traces_by_code, trace_client_dirs, access_lines = extract_traces_by_status_code(collected_dir)
+    traces_by_code, trace_client_dirs, access_lines = extract_traces_by_status_code(collected_dir, jobs)
     if not traces_by_code:
         return
 
@@ -758,7 +983,7 @@ def process_time(op_type: str, time_range: tuple, collected_dir: str, logs_dir: 
     print(f"  Wrote trace file: {trace_file}")
 
     # Step 3: Search in parallel.
-    search_dirs = [collected_dir, logs_dir]
+    search_dirs = list(collected_dir) + list(logs_dir)
     search_traces(traces, search_dirs, output_dir, jobs)
 
     print(f"  Operation '{op_type}' complete, results: {output_dir}/")
@@ -931,7 +1156,7 @@ def process_percentile(op_type: str, percentile: float, collected_dir: str, logs
     print(f"  Wrote trace file: {trace_file}")
 
     # Step 4: Search in parallel.
-    search_dirs = [collected_dir, logs_dir]
+    search_dirs = list(collected_dir) + list(logs_dir)
     search_traces(traces, search_dirs, output_dir, jobs)
 
     print(f"  Operation '{op_type}' complete, results: {output_dir}/")
@@ -947,10 +1172,11 @@ def main():
             dir_structure = """
 
 Directory layout:
-  Place this script beside collected/ and collected_worker_logs/.
+  Pass the collection root with -f. Standard collected/ and
+  collected_worker_logs/ layouts are discovered automatically. For mixed
+  second-level collections, use -p to select directories by prefix.
 
-  /parent/                         # Script directory
-  |-- trace_collector.py            # This script
+  /parent/                         # -f root directory
   |-- unique_traces_*.txt           # Generated trace files
   |-- collected/                    # Client logs used to extract traces
   |   |-- client-worker/
@@ -976,6 +1202,7 @@ Modes:
     Use when a known log marker, such as "| 1001 | DS", identifies the target traces.
 
     Examples:
+      python3 trace_collector.py -f /path/to/rootDir -p jingpai --type all-core
       python3 trace_collector.py --type core "| 1001 | DS"
       python3 trace_collector.py --type core "| 1001 | DS:| 1002 | DS"
 
@@ -1006,8 +1233,8 @@ Modes:
       python3 trace_collector.py --type percentile "GET:PUT" P99.99
 
 Common options:
-  --collected-dir   Client log directory (default: collected)
-  --logs-dir        Worker log directory (default: collected_worker_logs)
+  -f, --dir         Collection root; standard or mixed layouts are discovered.
+  -p, --prefix      Optional second-level mixed-collection directory prefix.
   --output-dir      Output root directory (default depends on mode)
   --trace-file      Trace file prefix (default: unique_traces)
 """
@@ -1018,6 +1245,9 @@ Common options:
         formatter_class=CustomHelpFormatter,
         epilog="""
 Examples:
+  # mixed second-level collections selected by prefix
+  python3 trace_collector.py -f /path/to/rootDir -p jingpai --type all-core
+
   # core mode
   python3 trace_collector.py --type core "| 1001 | DS"
 
@@ -1046,16 +1276,12 @@ Examples:
         nargs='*',
         help="Positional arguments: core search strings or percentile operation and percentile"
     )
-    parser.add_argument(
-        "--collected-dir",
-        default="collected",
-        help="Client log directory used to extract and search traces (default: collected)"
-    )
-    parser.add_argument(
-        "--logs-dir",
-        default="collected_worker_logs",
-        help="Worker log directory used only for searching (default: collected_worker_logs)"
-    )
+    parser.add_argument('-f', '--dir',
+                        help='root directory containing standard or mixed collections (default: script directory)')
+    parser.add_argument('-p', '--prefix',
+                        help='only scan second-level mixed collection directories with this prefix')
+    parser.add_argument('--cross-node', action='store_true',
+                        help='fetch the root from Kubernetes nodes before local processing')
     parser.add_argument(
         "--output-dir",
         default="trace_collect",
@@ -1101,24 +1327,37 @@ Examples:
         parser.error("--jobs must be at least 1")
 
     exec_dir = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
-
-    collected_dir = os.path.join(exec_dir, args.collected_dir)
-    logs_dir = os.path.join(exec_dir, args.logs_dir)
-    output_root = os.path.join(exec_dir, args.output_dir)
+    input_root = args.dir or exec_dir
+    if args.cross_node:
+        try:
+            prefilter = None
+            if args.type == 'core':
+                prefilter = [value.strip() for value in ':'.join(args.values).split(':') if value.strip()]
+            elif args.type == 'percentile' and args.values:
+                prefilter = [value.strip() for value in args.values[0].split(':') if value.strip()]
+            elif args.type == 'time-buckets':
+                prefilter = [value for value in args.ops.split(',') if value]
+            elif args.type == 'all-core':
+                prefilter = ['| DS', '|DS']
+            input_root = stage_cross_node(input_root, args.jobs, args.prefix, prefilter)
+        except Exception as exc:
+            parser.error(f'cross-node staging failed: {exc}')
+    try:
+        collected_dirs, worker_dirs = discover_log_roots(input_root, args.prefix)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if not collected_dirs:
+        parser.error('no client log directories were discovered')
+    if not worker_dirs:
+        parser.error('no worker log directories were discovered')
+    output_root = os.path.join(os.path.abspath(input_root), args.output_dir)
     output_dir = mode_output_dir(output_root, args.type)
-
-    if not os.path.exists(collected_dir):
-        print(f"ERROR: collected directory does not exist: {collected_dir}")
-        sys.exit(1)
-    if not os.path.exists(logs_dir):
-        print(f"ERROR: worker log directory does not exist: {logs_dir}")
-        sys.exit(1)
 
     print(f"\n{'#'*60}")
     print(f"Mode: {args.type}")
     print(f"Script directory: {exec_dir}")
-    print(f"Client logs: {collected_dir}")
-    print(f"Worker logs: {logs_dir}")
+    print(f"Client log directories: {len(collected_dirs)}")
+    print(f"Worker log directories: {len(worker_dirs)}")
     print(f"Output directory: {output_dir}")
     print(f"Trace limit per filter: {args.max_traces}")
     print(f"Parallel workers: {args.jobs}")
@@ -1137,12 +1376,12 @@ Examples:
             print(f"  {i}. '{c}'")
 
         for core in search_cores:
-            process_core(core, collected_dir, logs_dir, output_dir, args.trace_file, args.max_traces, args.jobs, args.debug_search)
+            process_core(core, collected_dirs, worker_dirs, output_dir, args.trace_file, args.max_traces, args.jobs, args.debug_search)
 
     elif args.type == "all-core":
         if args.values:
             parser.error("all-core mode does not accept positional values")
-        process_all_core(collected_dir, logs_dir, output_dir, args.trace_file, args.max_traces, args.jobs, args.debug_search)
+        process_all_core(collected_dirs, worker_dirs, output_dir, args.trace_file, args.max_traces, args.jobs, args.debug_search)
 
     elif args.type == "time-buckets":
         if args.values:
@@ -1156,7 +1395,7 @@ Examples:
                 parse_time_range(value)
         except ValueError as exc:
             parser.error(str(exc))
-        process_time_buckets(ops, ranges, collected_dir, logs_dir, output_dir,
+        process_time_buckets(ops, ranges, collected_dirs, worker_dirs, output_dir,
                              args.trace_file, args.max_traces, args.jobs, args.debug_search)
 
     elif args.type == "percentile":
@@ -1186,7 +1425,7 @@ Examples:
         print(f"Percentile: {percentile_str} ({percentile})")
 
         for op_type in op_types:
-            process_percentile(op_type, percentile, collected_dir, logs_dir, output_dir,
+            process_percentile(op_type, percentile, collected_dirs, worker_dirs, output_dir,
                                args.trace_file, args.max_traces, args.jobs)
 
     print(f"\n{'#'*60}")
