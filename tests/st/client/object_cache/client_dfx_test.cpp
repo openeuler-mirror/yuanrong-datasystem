@@ -1858,11 +1858,17 @@ TEST_F(RoutedWorkerDfxTest, LEVEL1_TestRouteAfterTwoWorkerFailures)
     LOG(INFO) << "Test routing while two workers fail in sequence.";
     StartWorkerAndWaitReady({ 0, 1, 2 });
     InitClients();
+    // Fail the serving workers while keeping each write's metadata owner reachable.
+    std::string objKey;
+    std::string secondKeyOnWorker1;
+    std::string secondKeyOnWorker2;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "first_put_", objKey));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "second_put_", secondKeyOnWorker1));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(2, "second_put_", secondKeyOnWorker2));
     DS_ASSERT_OK(cluster_->KillWorker(0));
     sleep(kRoutedWorkerNodeDeadTimeoutSec + 1);
     DS_ASSERT_OK(EnablePublishCounting({ 1, 2 }));
 
-    std::string objKey = "obj1";
     size_t objSize = 500 * 1024ul;
     std::string data(objSize, 'a');
     uint64_t worker1PublishBefore = 0;
@@ -1890,7 +1896,7 @@ TEST_F(RoutedWorkerDfxTest, LEVEL1_TestRouteAfterTwoWorkerFailures)
     DS_ASSERT_OK(cluster_->KillWorker(routedWorker));
     sleep(kRoutedWorkerNodeDeadTimeoutSec + 1);
 
-    std::string objKey2 = "obj2";
+    const std::string &objKey2 = remainingWorker == 1 ? secondKeyOnWorker1 : secondKeyOnWorker2;
     std::string data2(objSize, 'b');
     DS_ASSERT_OK(client_->Put(objKey2, reinterpret_cast<uint8_t *>(const_cast<char *>(data2.data())), data2.size(),
                               CreateParam{}));
