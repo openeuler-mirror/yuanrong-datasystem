@@ -33,6 +33,7 @@ else()
 endif()
 set(libzmq_SHA256 "e9a5db55f88f7214614b7e334d74ac501ad0726bcc54241205b7f4b11f132744")
 
+set(_DS_SAVED_PKG_CONFIG_PATH "$ENV{PKG_CONFIG_PATH}")
 set(ENV{PKG_CONFIG_PATH} "${Sodium_ROOT}/lib/pkgconfig")
 set(libzmq_CMAKE_OPTIONS
     -DCMAKE_BUILD_TYPE:STRING=Release
@@ -71,6 +72,12 @@ set(ZeroMQ_ROOT ${ZeroMQ_ROOT})
 find_package(ZeroMQ ${libzmq_VERSION} REQUIRED)
 include_directories(${ZeroMQ_INCLUDE_DIR})
 
+
+set(ENV{PKG_CONFIG_PATH} "${_DS_SAVED_PKG_CONFIG_PATH}")
+
+if (POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+endif()
 function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_directory proto_src_directory)
     if (NOT ARGN)
         message(SEND_ERROR "Error: ZMQ_GENERATE_CPP() called without any proto files")
@@ -82,16 +89,16 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
     foreach (file ${ARGN})
         get_filename_component(abs_file ${file} ABSOLUTE)
         get_filename_component(file_name ${file} NAME_WE)
-        
+
         file(RELATIVE_PATH _REL_PATH ${CMAKE_SOURCE_DIR}/src ${abs_file})
         get_filename_component(_REL_DIR ${_REL_PATH} DIRECTORY)
-        
+
         if(_REL_DIR)
           set(_OUTPUT_PREFIX "${target_directory}/${_REL_DIR}")
         else()
           set(_OUTPUT_PREFIX "${target_directory}")
         endif()
-        
+
         file(MAKE_DIRECTORY ${_OUTPUT_PREFIX})
 
         list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.pb.cc")
@@ -106,7 +113,10 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
         list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.cc")
         list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.h")
 
-        set(LD_LIB_PATH "${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}")
+        ds_protoc_command(_ds_protoc)
+        ds_proto_include_args(_ds_proto_include_args)
+        ds_proto_dependencies("${abs_file}" "${_OUTPUT_PREFIX}/${file_name}.rpc.d" _dep_arg _dep_rule
+            "${CMAKE_SOURCE_DIR}/src" "${proto_src_directory}" ${_ds_proto_include_args})
         add_custom_command(
             OUTPUT "${_OUTPUT_PREFIX}/${file_name}.pb.cc"
             "${_OUTPUT_PREFIX}/${file_name}.pb.h"
@@ -120,14 +130,14 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
             "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.cc"
             "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.h"
             "${_OUTPUT_PREFIX}/${file_name}.auth.proto"
-            COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${LD_LIB_PATH}
-                    $<TARGET_FILE:protobuf::protoc>
-            ARGS -I ${CMAKE_SOURCE_DIR}/src -I ${proto_src_directory}
-                 --zmq_out ${target_directory} 
+            COMMAND ${_ds_protoc}
+            ARGS -I ${CMAKE_SOURCE_DIR}/src -I ${proto_src_directory} ${_ds_proto_include_args}
+                 ${_dep_arg} --zmq_out ${target_directory}
                  --cpp_out ${target_directory}
-                 --plugin=protoc-gen-zmq=$<TARGET_FILE:zmq_plugin> 
+                 --plugin=protoc-gen-zmq=$<TARGET_FILE:zmq_plugin>
                  ${abs_file}
-            DEPENDS ${abs_file} zmq_plugin
+            DEPENDS ${abs_file} protobuf::protoc zmq_plugin
+            ${_dep_rule}
             COMMENT "Running c++ ZMQ compiler on ${file}" VERBATIM)
         add_custom_target(ZMQ_PROTO_LIB_DEPEND_${file_name} DEPENDS
                 "${_OUTPUT_PREFIX}/${file_name}.pb.cc"

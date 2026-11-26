@@ -3,7 +3,7 @@ set(ZMQ_PLUGIN_DEPEND_LIBS
         protobuf::libprotobuf
         protobuf::libprotoc
         common_util
-        $<TARGET_FILE:utils_protos>
+        utils_protos
         rpc_option_protos
         )
 
@@ -24,8 +24,10 @@ add_dependencies(rpc_generator utils_protos rpc_option_protos)
 add_executable(zmq_plugin plugin_generator/zmq_plugin.cpp)
 target_link_libraries(zmq_plugin PRIVATE rpc_generator)
 
-add_executable(rpc_plugin plugin_generator/rpc_plugin.cpp)
-target_link_libraries(rpc_plugin PRIVATE rpc_generator)
+if (NOT DS_BUILD_STATIC_SDK)
+    add_executable(rpc_plugin plugin_generator/rpc_plugin.cpp)
+    target_link_libraries(rpc_plugin PRIVATE rpc_generator)
+endif()
 
 # zmq server library
 set(COMMON_RPC_ZMQ_SRCS
@@ -98,13 +100,19 @@ if (BUILD_WITH_URMA)
                 common_rdma)
 endif()
 
+if (NOT DS_BUILD_STATIC_SDK)
 add_library(common_rpc_zmq STATIC ${COMMON_RPC_ZMQ_SRCS})
 target_link_libraries(common_rpc_zmq PUBLIC ${COMMON_RPC_ZMQ_DEPENDS_LIBS})
 add_dependencies(common_rpc_zmq rpc_option_protos)
 
+endif()
+
 add_library(common_rpc_zmq_client STATIC ${COMMON_RPC_ZMQ_SRCS})
 target_link_libraries(common_rpc_zmq_client PUBLIC ${COMMON_RPC_ZMQ_CLIENT_DEPENDS_LIBS})
 add_dependencies(common_rpc_zmq_client rpc_option_protos)
+if (DS_BUILD_STATIC_SDK)
+    add_library(common_rpc_zmq ALIAS common_rpc_zmq_client)
+endif()
 
 set(RPC_STUB_CACHE_MGR_SRCS
         rpc_stub_cache_mgr.cpp

@@ -219,3 +219,22 @@ output/
 ```bash
 pip install output/openyuanrong_datasystem-*.whl
 ```
+
+## 从源码嵌入 Host KVClient
+
+父工程将 DataSystem 固定为 Git 子模块，编译 bridge 时链接 `Datasystem::client_static`。
+
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(Host LANGUAGES CXX)
+
+add_subdirectory(third_party/yuanrong-datasystem/cmake/static-sdk ds-sdk)
+add_library(xllm_yuanrong_store_bridge SHARED bridge.cpp)
+target_link_libraries(xllm_yuanrong_store_bridge PRIVATE Datasystem::client_static)
+```
+
+`bridge.cpp` 直接包含 `<datasystem/kv_client.h>`。需要原生 Linux、C++17 和 libstdc++。父工程可以先定义自己的 protobuf、gflags 和 brpc target。首次 configure 在独立的 DS 构建目录准备第三方库，使用仓库选定的版本、生成工具和补丁。通过 `DS_OPENSOURCE_DIR` 可指定可复用的缓存。配置时用 `DS_STATIC_SDK_JOBS` 或环境变量 `CMAKE_BUILD_PARALLEL_LEVEL` 统一指定并行度，默认 8。
+
+静态 Client 源码与头文件直接来自子模块。DS 从 CMake File API 读取共享库消费者实际使用的归档和链接顺序。构建 bridge 时增量编译 Client。公开 target 随附固定依赖版本的弱 TLS 绑定声明，使这些可选初始化函数在 bridge 内解析。升级相关依赖时应在最终共享库上复核动态符号。独立构建使用编译器默认 libstdc++ ABI，父工程也可在引入子目录前将 `DS_GLIBCXX_USE_CXX11_ABI` 设为 0 或 1。公开 target 为调用 DS 的 bridge 选择匹配的 ABI。
+
+xLLM 负责 bridge 的 C 接口、最终导出白名单、`dlopen` 和 wheel 打包。Host KVClient 及配套依赖静态链接进 bridge，运行时使用平台的系统 C/C++ 运行库。前缀 jemalloc 负责 DS 自有分配，C ABI 两侧各自释放自己分配的对象。

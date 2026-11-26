@@ -1,3 +1,4 @@
+option(DS_BUILD_STATIC_SDK "Build the source-embedded static PIC client" OFF)
 option(WITH_TESTS "Enable run datasystem testcases" OFF)
 option(BUILD_COVERAGE "Build code for coverage statistics" OFF)
 option(FAIL_ON_WARNINGS "Treat compile warnings as errors" ON)

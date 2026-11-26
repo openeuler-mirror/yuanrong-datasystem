@@ -15,11 +15,12 @@ function(GENERATE_RPC_CPP source_files header_files proto_file)
     set(output_prefix ${PROTO_BUILD_DIR}/datasystem/protos/${file_name})
     set(auth_source ${output_prefix}.auth.pb.cc)
     set(auth_header ${output_prefix}.auth.pb.h)
+    ds_protoc_command(_ds_protoc)
+    ds_proto_include_args(_ds_proto_includes)
     add_custom_command(
             OUTPUT ${auth_source} ${auth_header}
-            COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}"
-                    $<TARGET_FILE:protobuf::protoc>
-            ARGS -I ${PROTO_BUILD_DIR} -I ${CMAKE_SOURCE_DIR}/src -I ${PROTO_SRC_DIR}
+            COMMAND ${_ds_protoc}
+            ARGS -I ${PROTO_BUILD_DIR} -I ${CMAKE_SOURCE_DIR}/src -I ${PROTO_SRC_DIR} ${_ds_proto_includes}
                  --cpp_out ${PROTO_BUILD_DIR} ${output_prefix}.auth.proto
             DEPENDS ${output_prefix}.auth.proto protobuf::protoc
             COMMENT "Compiling RPC authentication descriptors for ${proto_file}" VERBATIM)
@@ -32,21 +33,29 @@ function(GENERATE_RPC_CPP source_files header_files proto_file)
 endfunction()
 
 function(GEN_GLOBAL_PROTO_LIB_DEPEND)
-    set(options PUB)
-    set(options CLIENT)
+    set(options PUB CLIENT)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCE DEPEND LINK)
     cmake_parse_arguments(LIB "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    if (DS_BUILD_STATIC_SDK AND NOT LIB_CLIENT)
+        return()
+    endif()
     add_library(${LIB_NAME} STATIC ${LIB_SOURCE})
+    if (DS_BUILD_STATIC_SDK AND LIB_CLIENT)
+        string(REGEX REPLACE "_client$" "" _SERVER_NAME "${LIB_NAME}")
+        add_library(${_SERVER_NAME} ALIAS ${LIB_NAME})
+    endif()
     add_dependencies(${LIB_NAME} ${LIB_DEPEND})
     set_target_properties(${LIB_NAME} PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
 
     target_include_directories(${LIB_NAME} PUBLIC ${PROTO_BUILD_DIR})
 
-    if (${LIB_CLIENT})
-        list(APPEND LIB_LINK common_rpc_zmq_client)
-    else()
-        list(APPEND LIB_LINK common_rpc_zmq)
+    if (NOT DS_BUILD_STATIC_SDK OR "${LIB_SOURCE}" MATCHES "\\.service\\.rpc\\.pb\\.cc")
+        if (LIB_CLIENT)
+            list(APPEND LIB_LINK common_rpc_zmq_client)
+        else()
+            list(APPEND LIB_LINK common_rpc_zmq)
+        endif()
     endif()
 
     if (${LIB_PUB})
@@ -61,7 +70,11 @@ function(GEN_GLOBAL_PROTO_LIB_DEPEND_SHARED)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCE DEPEND LINK)
     cmake_parse_arguments(LIB "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-    add_library(${LIB_NAME} SHARED ${LIB_SOURCE})
+    if (DS_BUILD_STATIC_SDK)
+        add_library(${LIB_NAME} STATIC ${LIB_SOURCE})
+    else()
+        add_library(${LIB_NAME} SHARED ${LIB_SOURCE})
+    endif()
     add_dependencies(${LIB_NAME} ${LIB_DEPEND})
     set_target_properties(${LIB_NAME} PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
 
