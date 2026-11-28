@@ -507,6 +507,25 @@ def install_whl(pod, namespace, whl_path, timeout=DEFAULT_TIMEOUT):
             pass
 
 
+def expand_pod_placeholders(config, pod):
+    """Expand ``{pod_name}`` placeholders in per-pod string config values.
+
+    Called on the per-pod config right before startup so a single
+    ``--set key=.../{pod_name}`` template produces per-pod values -- e.g.
+    disjoint ``log_dir`` for multiple instances packed onto one node. Both the
+    dscli ``{"value": ...}`` wrapper and plain string values are rewritten in
+    place; callers that never use the placeholder are unaffected.
+    """
+    if not isinstance(config, dict):
+        return config
+    for key, entry in config.items():
+        if isinstance(entry, dict) and isinstance(entry.get('value'), str):
+            entry['value'] = entry['value'].replace('{pod_name}', pod['name'])
+        elif isinstance(entry, str):
+            config[key] = entry.replace('{pod_name}', pod['name'])
+    return config
+
+
 def start_service(pod, namespace, config, remote_config, port, process_name,
                   enable_procmon=True,
                   numactl_opts=None, jemalloc_prof_conf=None,
@@ -537,6 +556,7 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
     """
     pod_name = pod['name']
     pod_ip = pod['ip']
+    expand_pod_placeholders(config, pod)
 
     with tempfile.NamedTemporaryFile(
         mode='w', suffix='.json', prefix=f'service_{pod_name}_',
@@ -880,6 +900,9 @@ def read_remote_log_dir(namespace, pods, remote_config, timeout=DEFAULT_TIMEOUT)
     Returns (log_dir_or_None, config_dict_or_empty). log_dir may be a
     {"value": ...} dict (dscli config style) or a plain string. On any
     failure (no pods, cat fails, JSON parse fails), returns (None, {}).
+
+    Pass a single-element pod list (``[pod]``) to read one pod's log_dir,
+    which is what collect/clean use to resolve per-pod log directories.
     """
     if not pods:
         return None, {}
@@ -1034,15 +1057,16 @@ def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
     with concurrent TLS+impersonation connections, so callers should pass
     ``--max-workers`` (defaults to ``len(pods)`` for backward compat).
     """
-    if log_dir is None:
-        log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
-    if not log_dir:
-        log_error('ERROR: log_dir not found in remote config')
-        return 1
-
+    # An explicit ``log_dir`` is shared by all pods; otherwise each pod reads
+    # its own remote config, which covers both the shared-directory layout and
+    # the per-pod layout produced by the ``{pod_name}`` placeholder.
+    shared_log_dir = log_dir
     remote_config_dir = os.path.dirname(remote_config)
-    log_info(f'Using log directory: {log_dir}')
     local_dir = output_dir
+    if shared_log_dir:
+        log_info(f'Using shared log directory: {shared_log_dir}')
+    else:
+        log_info('Using per-pod log directory from remote config')
 
     # Size the collect stagger window to the batch: a 500-pod collect fires
     # 500 concurrent downloads; a random delay per pod spreads the wave.
@@ -1050,13 +1074,19 @@ def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
     set_collect_stagger_window(min(30.0, len(pods) * 0.06))
 
     def do_op(pod):
+        pod_log_dir = shared_log_dir
+        if pod_log_dir is None:
+            pod_log_dir, _ = read_remote_log_dir(namespace, [pod], remote_config, timeout)
+        if not pod_log_dir:
+            log_info(f'  {pod["name"]} ({pod["ip"]}) -> log_dir not found in remote config')
+            return False
         kwargs = {'include_pod_info': True} if include_pod_info else {}
         if archive_options is not None:
             kwargs['archive_options'] = archive_options
         delay = _collect_stagger_delay()
         if delay > 0:
             time.sleep(delay)
-        return collect_logs_from_pod(pod, namespace, log_dir, local_dir,
+        return collect_logs_from_pod(pod, namespace, pod_log_dir, local_dir,
                                      remote_config_dir=remote_config_dir,
                                      remote_dir=remote_dir, timeout=timeout, **kwargs)
     return do_for_all_pods(pods, do_op, f'Collecting {label}',
@@ -1075,11 +1105,13 @@ def cmd_clean_impl(pods, namespace, remote_config, process_name, label,
     and preserves the binary + lib/ so a re-deploy skips the 100M+ upload;
     a no-op when ``remote_dir`` is ``None`` (dscli mode never touched it).
     """
-    log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
+    # Each pod reads log_dir from its own remote config, covering both the
+    # shared-directory layout and the per-pod ``{pod_name}`` layout.
     remote_config_dir = os.path.dirname(remote_config)
 
     def do_op(pod):
-        return clean_pod(pod, namespace, log_dir, remote_config_dir,
+        pod_log_dir, _ = read_remote_log_dir(namespace, [pod], remote_config, timeout)
+        return clean_pod(pod, namespace, pod_log_dir, remote_config_dir,
                          process_name, remote_dir=remote_dir, timeout=timeout,
                          keep_binary=keep_binary)
     return do_for_all_pods(pods, do_op, f'Cleaning {label}')
@@ -1337,6 +1369,8 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
     """
     name = pod['name']
     pod_ip = pod['ip']
+    if config is not None:
+        expand_pod_placeholders(config, pod)
     env = {}
     if jemalloc_prof_conf is not None:
         try:
